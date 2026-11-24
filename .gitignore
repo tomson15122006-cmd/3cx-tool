@@ -1,0 +1,9 @@
+.env
+tcx-runs/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.venv/
+# eksporty z PBX zawieraja dane osobowe (RODO) - nie wrzucaj ich do gita
+export_*.csv
+export_*.json

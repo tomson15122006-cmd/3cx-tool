@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tcx-bulk"
+version = "0.1.0"
+description = "Masowe zmiany w 3CX przez Configuration API (XAPI) z CSV: dry-run, backup, rollback"
+requires-python = ">=3.9"
+dependencies = ["requests>=2.28"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+tcx-bulk = "tcx_bulk.cli:main"
+
+[project.gui-scripts]
+tcx-bulk-gui = "tcx_bulk.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

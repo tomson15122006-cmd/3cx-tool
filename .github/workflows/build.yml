@@ -1,0 +1,50 @@
+name: Build executables
+
+# Buduje tcx-bulk-gui (okienko) i tcx-bulk (terminal) dla Windows i Linuxa.
+# Uruchamia sie przy kazdym pushu, recznie (Actions -> Run workflow) oraz przy tagu v*.
+# Gotowe pliki: zakladka Actions -> wybrany przebieg -> Artifacts.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Linux - tkinter i Xvfb (do testow GUI)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
+      - name: Instalacja
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" pyinstaller
+      - name: Testy (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pytest -q
+      - name: Testy (Linux, z GUI przez Xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python -m pytest -q
+      - name: Budowa plikow wykonywalnych
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name tcx-bulk-gui --paths src packaging/gui_entry.py
+          pyinstaller --noconfirm --onefile --name tcx-bulk --paths src packaging/cli_entry.py
+      - name: Test dymny (CLI --help)
+        run: ./dist/tcx-bulk --help
+        if: runner.os == 'Linux'
+      - name: Test dymny (CLI --help, Windows)
+        run: .\dist\tcx-bulk.exe --help
+        if: runner.os == 'Windows'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tcx-bulk-${{ runner.os }}
+          path: dist/*
