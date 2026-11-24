@@ -154,10 +154,14 @@ Notes:
 - Without internet access to github.com, use the "Releases" page on another machine and copy the new file over the old one.
 
 ### Publishing a new version (for the maintainer)
-1. Change `__version__` in `src/tcx_bulk/__init__.py` and `version` in `pyproject.toml` (e.g. `0.2.1`), commit and push.
-2. On GitHub: **Actions → "Build executables" → Run workflow**, pick the branch, type the version **with a `v`** (e.g. `v0.2.1`) and click **Run workflow**.
-   (Alternative for people who use git in a terminal: `git tag v0.2.1 && git push origin v0.2.1`.)
-3. GitHub builds Windows + Linux, creates the tag and a Release **with `SHA256SUMS.txt`**. The run fails if the version you typed differs from the program's `__version__`. A few minutes later everyone's "Check for updates" button sees it.
+**It is automatic.** Change `__version__` in `src/tcx_bulk/__init__.py` and `version` in `pyproject.toml` (e.g. `0.2.2`), commit and push. GitHub then:
+1. runs the tests (a failing test stops everything: nothing is released),
+2. builds Windows + Linux,
+3. creates the Release `v0.2.2` with `SHA256SUMS.txt`, using your commit messages as the release notes.
+
+A few minutes later everyone's "Check for updates" button sees it. A push that does **not** change the version only builds (the files appear as "Artifacts" of the run) and releases nothing. Only the branches listed in `RELEASE_BRANCHES` in `.github/workflows/build.yml` can release.
+
+A bad release? Delete it under **Releases** (or publish a higher version). Manual alternatives: *Actions → Run workflow* with a version, or `git tag v0.2.2 && git push origin v0.2.2`.
 
 To make the repository public: GitHub → the repository → **Settings → General → scroll to "Danger Zone" → Change visibility → Make public**. Before you do: everything in the repo, and its full history, becomes visible to anyone. Never commit real credentials or KeePass exports (they are in `.gitignore`).
 

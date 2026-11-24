@@ -3,11 +3,12 @@ name: Build executables
 # Builds tcx-bulk-gui (desktop window) and tcx-bulk (terminal) for Windows and Linux.
 #
 #   * every push        -> builds, runs the tests, keeps the files as "Artifacts" of the run
-#   * RELEASE (new version for the in-app "Check for updates" button), two ways:
-#       A) GitHub -> Actions -> "Build executables" -> Run workflow -> type the version, e.g. v0.2.1
-#       B) push a tag:  git tag v0.2.1 && git push origin v0.2.1
-#     Both build Windows + Linux, create a GitHub Release with SHA256SUMS.txt, and fail if the version
-#     typed/tagged differs from __version__ in src/tcx_bulk/__init__.py.
+#   * RELEASE (the new version offered by the in-app "Check for updates" button) happens AUTOMATICALLY:
+#       push a commit that changes __version__ in src/tcx_bulk/__init__.py to a version that has no
+#       release yet -> after the tests pass, Windows + Linux are built and a GitHub Release is created
+#       (with SHA256SUMS.txt and the commit messages as release notes).
+#       Only pushes to the branches listed in RELEASE_BRANCHES below can release.
+#     Manual alternatives: Actions -> Run workflow -> type a version (v0.2.1), or push a tag v0.2.1.
 on:
   push:
     branches: ["**"]
@@ -19,18 +20,34 @@ on:
         required: false
         default: ""
 
+# One release at a time, so two quick pushes cannot both try to publish the same version.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   meta:
     runs-on: ubuntu-22.04
     outputs:
       tag: ${{ steps.t.outputs.tag }}
     steps:
+      - uses: actions/checkout@v4
       - id: t
         env:
           INPUT_TAG: ${{ github.event.inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCHES: "main master claude/sweet-euler-0xowds"
         run: |
           TAG="$INPUT_TAG"
           if [ -z "$TAG" ] && [[ "$GITHUB_REF" == refs/tags/v* ]]; then TAG="$GITHUB_REF_NAME"; fi
+          if [ -z "$TAG" ] && [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$GITHUB_REF" == refs/heads/* ]]; then
+            for b in $RELEASE_BRANCHES; do
+              if [ "$GITHUB_REF_NAME" = "$b" ]; then
+                V=$(grep -oP '__version__ = "\K[^"]+' src/tcx_bulk/__init__.py)
+                if ! gh release view "v$V" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then TAG="v$V"; fi
+              fi
+            done
+          fi
           if [ -n "$TAG" ] && ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Release version must look like v1.2.3, got: $TAG"; exit 1
           fi
@@ -107,6 +124,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history + tags, for the release notes
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
@@ -119,4 +139,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
-        run: gh release create "$TAG" release/* --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "$TAG" --generate-notes
+        run: |
+          PREV=$(gh release list --repo "${{ github.repository }}" --limit 1 --json tagName -q '.[0].tagName' || true)
+          if [ -n "$PREV" ] && git rev-parse -q --verify "refs/tags/$PREV" >/dev/null; then RANGE="$PREV..HEAD"; else RANGE="-n 15"; fi
+          git log --no-merges --pretty='- %s' $RANGE > notes.md
+          [ -s notes.md ] || echo "- Maintenance release" > notes.md
+          gh release create "$TAG" release/* --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "$TAG" --notes-file notes.md
