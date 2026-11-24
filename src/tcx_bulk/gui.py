@@ -182,6 +182,10 @@ class App(ttk.Frame):
 
         # ---- log
         lg = ttk.LabelFrame(self, text=" Log ", padding=6); lg.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        bar = ttk.Frame(lg); bar.pack(fill="x", pady=(0, 4))
+        ttk.Button(bar, text="Copy log", command=self.copy_log).pack(side="left")
+        ttk.Button(bar, text="Clear", command=self.clear_log).pack(side="left", padx=6)
+        self.copy_note = ttk.Label(bar, text="", font=self.f_sub, foreground="#7a7a7a"); self.copy_note.pack(side="left", padx=6)
         self.log = scrolledtext.ScrolledText(lg, height=7, font=tkfont.nametofont("TkFixedFont"), state="disabled",
                                              borderwidth=0, highlightthickness=0, wrap="word")
         self.log.pack(fill="both", expand=True)
@@ -191,6 +195,18 @@ class App(ttk.Frame):
         for item in self.tree.selection():
             v = self.tree.item(item, "values")
             self._say("  ".join(str(x) for x in v if str(x) != ""))
+
+    def copy_log(self) -> None:
+        """Put the whole log on the clipboard (to paste into an email/chat when asking for help)."""
+        text = self.log.get("1.0", "end").strip()
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update_idletasks()
+        self.copy_note.configure(text=f"Copied {len(text.splitlines())} lines to the clipboard")
+        self.after(4000, lambda: self.copy_note.configure(text=""))
+
+    def clear_log(self) -> None:
+        self.log.configure(state="normal"); self.log.delete("1.0", "end"); self.log.configure(state="disabled")
 
     def _recolor(self) -> None:
         pal = PALETTE[self.theme]
@@ -395,7 +411,7 @@ class App(ttk.Frame):
         self._save_profile()
 
         def job() -> None:
-            self.say(f"Connecting to {fqdn} ...")
+            self.say(f"Connecting to {fqdn} as Client ID '{cid}' (API key: {len(secret)} characters) ...")
             c = self.client_factory(fqdn, cid, secret, verify=verify)
             try:
                 names = c.entity_sets()

@@ -161,3 +161,11 @@ def test_stop_on_error(tmp_path):
     stats = execute(ops, client, "Users", run, stop_on_error=True, progress=None)
     assert stats == {"ok": 0, "failed": 1, "skipped": 1}
     assert summarize(ops)["update"] == 2
+
+
+def test_invalid_client_gives_actionable_hint():
+    client, _ = make_client(secret="zle")
+    with pytest.raises(ApiError) as e:
+        client.list_all("Users")
+    msg = str(e.value)
+    assert "REJECTED the Client ID" in msg and "Integrations > API" in msg and e.value.status == 400

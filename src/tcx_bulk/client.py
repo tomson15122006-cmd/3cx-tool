@@ -99,11 +99,20 @@ class XapiClient:
         except requests.RequestException as e:
             raise ApiError(f"Cannot connect to {self.base}: {e}") from e
         if r.status_code != 200:
-            raise ApiError(
-                f"Login failed (HTTP {r.status_code}): {_error_text(r)}"
-                f"{_hint(r.status_code)}",
-                r.status_code,
-            )
+            text = _error_text(r)
+            if "invalid_client" in text:
+                hint = (
+                    "\nThe PBX answered, so the address is right, but it REJECTED the Client ID / API key. Check:"
+                    "\n  1. Client ID = the ID of the API client in 3CX (Admin > Integrations > API), not an extension "
+                    "or admin login."
+                    "\n  2. API key = the secret shown when the API client was created (it is shown only once - "
+                    "if it is lost, generate a new one)."
+                    "\n  3. The API client is enabled and has the Configuration API / an admin role."
+                    "\n  4. No stray characters were copied with the key (the tool trims spaces at the ends)."
+                )
+            else:
+                hint = _hint(r.status_code)
+            raise ApiError(f"Login failed (HTTP {r.status_code}): {text}{hint}", r.status_code)
         body = r.json()
         self._token = body["access_token"]
         self._expires = time.time() + max(int(body.get("expires_in", 3600)) - 60, 30)

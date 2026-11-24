@@ -151,3 +151,28 @@ def test_update_blocked_while_busy(tmp_path, monkeypatch):
     app.check_updates()
     assert "asked" not in calls and "wait" in app.log.get("1.0", "end").lower()
     root.destroy()
+
+
+def test_copy_log_puts_text_on_clipboard(tmp_path, monkeypatch):
+    monkeypatch.setattr(gui, "CONFIG", tmp_path / "profile.json")
+    root = tk.Tk()
+    app = gui.App(root, sync=True)
+    app.say("first line"); app.say("ERROR: something")
+    app.copy_log()
+    clip = root.clipboard_get()
+    assert "first line" in clip and "ERROR: something" in clip and "Copied" in app.copy_note["text"]
+    app.clear_log()
+    assert app.log.get("1.0", "end").strip() == ""
+    root.destroy()
+
+
+def test_login_log_shows_client_id_but_never_the_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(gui, "CONFIG", tmp_path / "profile.json")
+    root = tk.Tk()
+    app = gui.App(root, client_factory=lambda f, c, s, verify=True: make_client(secret="zle")[0], sync=True)
+    for k, v in (("fqdn", "pbx.test"), ("cid", "api-123"), ("secret", "SuperSecretKey")):
+        app.v[k].set(v)
+    app.connect()
+    out = app.log.get("1.0", "end")
+    assert "api-123" in out and "14 characters" in out and "SuperSecretKey" not in out
+    root.destroy()
