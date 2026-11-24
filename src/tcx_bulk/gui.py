@@ -10,6 +10,7 @@ Workflow:
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import threading
@@ -25,7 +26,7 @@ try:  # modern look (Windows 11 style); falls back to the default theme if missi
 except Exception:  # noqa: BLE001
     sv_ttk = None
 
-from . import __version__
+from . import __version__, updater
 from .bulk import (PlanError, build_plan, execute, export_records, format_op, guess_key,
                    read_csv, rollback, summarize, write_csv, Op)
 from .client import ApiError, XapiClient
@@ -59,6 +60,9 @@ class App(ttk.Frame):
         self.ops: List[Op] = []
         self.key = ""
         self.q: "queue.Queue[Callable[[], None]]" = queue.Queue()
+        self.busy = 0  # number of running background jobs (no updating while > 0)
+        self.pending_release: Optional[updater.Release] = None
+        self.restart = updater.restart  # replaceable in tests
         master.title(f"3CX Bulk Tool {__version__}")
         master.geometry("1240x820")
         master.minsize(1100, 720)
@@ -66,6 +70,8 @@ class App(ttk.Frame):
         self._build()
         self._load_profile()
         self.after(100, self._pump)
+        if not sync and updater.is_frozen() and not os.environ.get("TCX_NO_UPDATE_CHECK"):
+            self.after(2000, lambda: self.check_updates(silent=True))  # quietly marks the button if there is news
 
     # ------------------------------------------------------------ UI
     def _build(self) -> None:
@@ -92,42 +98,42 @@ class App(ttk.Frame):
         ttk.Label(tt, text=f"Bulk changes for 3CX through the API  ·  v{__version__}", font=self.f_sub, foreground="#7a7a7a").pack(anchor="w")
         self.btn_theme = ttk.Button(hdr, text="Dark mode", command=self.toggle_theme)
         self.btn_theme.pack(side="right")
+        self.btn_update = ttk.Button(hdr, text="Check for updates", command=self.check_updates)
+        self.btn_update.pack(side="right", padx=(0, 10))
         self.status = ttk.Label(hdr, text="Not connected", foreground="#c42b1c", font=self.f_head)
         self.status.pack(side="right", padx=16)
 
-        # ---- left column: systems
+        # ---- left column: two tabs (many systems from KeePass / one PBX typed by hand)
         left = ttk.Frame(self); left.grid(row=1, column=0, sticky="ns", padx=(0, 14))
-        card = ttk.LabelFrame(left, text=" 1  Systems ", padding=12)
-        card.pack(fill="both", expand=True)
-        ttk.Button(card, text="Import from KeePass CSV…", style="Accent.TButton", command=self.import_systems).pack(fill="x")
-        self.sys_label = ttk.Label(card, text="No systems imported", foreground="#7a7a7a")
+        self.nb = ttk.Notebook(left); self.nb.pack(fill="both", expand=True)
+        tab = ttk.Frame(self.nb, padding=12); self.nb.add(tab, text="  1  KeePass systems  ")
+        ttk.Button(tab, text="Import from KeePass CSV…", style="Accent.TButton", command=self.import_systems).pack(fill="x")
+        self.sys_label = ttk.Label(tab, text="No systems imported", foreground="#7a7a7a")
         self.sys_label.pack(anchor="w", pady=(6, 8))
-        ttk.Entry(card, textvariable=self.v["filter"]).pack(fill="x")
+        ttk.Entry(tab, textvariable=self.v["filter"]).pack(fill="x")
         self.v["filter"].trace_add("write", lambda *_: self._fill_list())
-        ttk.Label(card, text="Filter by name, address or group", font=self.f_sub, foreground="#7a7a7a").pack(anchor="w", pady=(2, 6))
-        lf = ttk.Frame(card); lf.pack(fill="both", expand=True)
+        ttk.Label(tab, text="Filter by name, address or group", font=self.f_sub, foreground="#7a7a7a").pack(anchor="w", pady=(2, 6))
+        lf = ttk.Frame(tab); lf.pack(fill="both", expand=True)
         self.lb = tk.Listbox(lf, selectmode="extended", height=10, width=34, exportselection=False,
                              borderwidth=0, highlightthickness=1, activestyle="none", font=(base, 10))
         sb = ttk.Scrollbar(lf, command=self.lb.yview); self.lb.configure(yscrollcommand=sb.set)
         self.lb.pack(side="left", fill="both", expand=True); sb.pack(side="right", fill="y")
         self.lb.bind("<<ListboxSelect>>", lambda _e: self._sync_selection())
-        row = ttk.Frame(card); row.pack(fill="x", pady=(8, 0))
+        row = ttk.Frame(tab); row.pack(fill="x", pady=(8, 0))
         ttk.Button(row, text="Select all shown", command=self.select_all_shown).pack(side="left")
         ttk.Button(row, text="Clear", command=self.clear_selection).pack(side="left", padx=6)
-        self.sel_label = ttk.Label(card, text="", font=self.f_head); self.sel_label.pack(anchor="w", pady=(8, 0))
+        self.sel_label = ttk.Label(tab, text="", font=self.f_head); self.sel_label.pack(anchor="w", pady=(8, 0))
+        self.btn_test_many = ttk.Button(tab, text="Test logins of the selected systems", command=self.connect)
+        self.btn_test_many.pack(fill="x", pady=(8, 0))
 
-        self.btn_one = ttk.Button(left, text="Or connect to a single PBX  ▾", command=self._toggle_one)
-        self.btn_one.pack(fill="x", pady=(12, 0))
-        one = self.one = ttk.LabelFrame(left, text=" Single PBX ", padding=12)
-        self._one_visible = False
-        for label, key, show in [("PBX address", "fqdn", ""), ("Client ID", "cid", ""),
+        one = ttk.Frame(self.nb, padding=12); self.nb.add(one, text="  Single PBX  ")
+        for label, key, show in [("PBX address (e.g. pbx.company.ie)", "fqdn", ""), ("Client ID", "cid", ""),
                                  ("Client Secret (API key)", "secret", "*"), ("CA file (optional)", "ca", "")]:
             ttk.Label(one, text=label, font=self.f_sub).pack(anchor="w")
-            ttk.Entry(one, textvariable=self.v[key], show=show).pack(fill="x", pady=(0, 6))
+            ttk.Entry(one, textvariable=self.v[key], show=show).pack(fill="x", pady=(0, 8))
         ttk.Checkbutton(one, text="Do not verify TLS certificate", variable=self.insecure).pack(anchor="w")
-        self.btn_connect = ttk.Button(one, text="Connect and test", command=self.connect)
-        self.btn_connect.pack(fill="x", pady=(8, 0))
-        self._toggle_one(True)  # visible until systems are imported
+        self.btn_connect = ttk.Button(one, text="Connect and test", style="Accent.TButton", command=self.connect)
+        self.btn_connect.pack(fill="x", pady=(12, 0))
 
         # ---- right column
         right = ttk.Frame(self); right.grid(row=1, column=1, sticky="nsew")
@@ -178,15 +184,6 @@ class App(ttk.Frame):
                                              borderwidth=0, highlightthickness=0, wrap="word")
         self.log.pack(fill="both", expand=True)
         self._recolor()
-
-    def _toggle_one(self, show: Optional[bool] = None) -> None:
-        show = (not self._one_visible) if show is None else show
-        if show:
-            self.one.pack(fill="x", pady=(6, 0))
-        else:
-            self.one.pack_forget()
-        self._one_visible = show
-        self.btn_one.configure(text="Or connect to a single PBX  " + ("▴" if show else "▾"))
 
     def _row_details(self, _event=None) -> None:
         for item in self.tree.selection():
@@ -283,12 +280,17 @@ class App(ttk.Frame):
     def work(self, fn: Callable[[], None]) -> None:
         """Run fn in the background (so the window does not freeze); errors go to the log."""
         def run() -> None:
+            self.busy += 1
             try:
                 fn()
             except (ApiError, PlanError, SystemsError) as e:
                 self.say(f"\nERROR: {e}")
+            except updater.UpdateError as e:
+                self.say(f"\nUPDATE ERROR: {e}")
             except Exception as e:  # noqa: BLE001 - never let the window die silently
                 self.say(f"\nUNEXPECTED ERROR: {type(e).__name__}: {e}")
+            finally:
+                self.busy -= 1
         if self.sync:
             run()
             self.flush()
@@ -320,7 +322,13 @@ class App(ttk.Frame):
         return lambda s: self.client_factory(s.fqdn, s.client_id, s.secret, verify=verify)
 
     # ------------------------------------------------------------ systems list
+    def in_systems_tab(self) -> bool:
+        return self.nb.index(self.nb.select()) == 0
+
     def selected_systems(self) -> List[System]:
+        """Selected systems - only while the 'KeePass systems' tab is the active one."""
+        if not self.in_systems_tab():
+            return []
         return [s for s in self.systems if s.name in self.chosen]
 
     def _fill_list(self) -> None:
@@ -362,7 +370,7 @@ class App(ttk.Frame):
             self.say(f"ERROR: {e}"); return
         self.systems, self.chosen, self.client = systems, set(), None
         self.sys_label.configure(text=f"{len(systems)} systems imported from {Path(path).name}")
-        self._toggle_one(False)
+        self.nb.select(0)
         self._fill_list()
         self.say(f"Imported {len(systems)} systems ({len(warnings)} entries skipped). Select the ones to work on.")
         for w in warnings[:20]:
@@ -380,7 +388,7 @@ class App(ttk.Frame):
             self._connect_many(sel); return
         fqdn, cid, secret = (self.v[k].get().strip() for k in ("fqdn", "cid", "secret"))
         if not (fqdn and cid and secret):
-            self.say("Fill in the PBX address, Client ID and Client Secret (or import systems and select some)."); return
+            self.say("Select systems on the \"KeePass systems\" tab, or fill in the PBX address, Client ID and Client Secret on the \"Single PBX\" tab."); return
         verify = self.verify()
         self._save_profile()
 
@@ -467,7 +475,7 @@ class App(ttk.Frame):
         if not rows:
             self.say("The CSV file has no data rows."); return
         sel = self.selected_systems()
-        multi = bool(self.systems) and (bool(sel) or has_system_col(headers))
+        multi = bool(self.systems) and self.in_systems_tab() and (bool(sel) or has_system_col(headers))
         if not multi and not self.need_client():
             return
         self.ops, self.plans = [], []
@@ -601,6 +609,59 @@ class App(ttk.Frame):
             self.say(f"DONE: restored={st['ok']}, failed={st['failed']}, not restorable={st['not_restorable']}")
         self.work(job)
 
+    # ------------------------------------------------------------ updates
+    def check_updates(self, silent: bool = False) -> None:
+        """Header button. Checks GitHub for a newer version; on a yes, downloads, verifies and installs it."""
+        if self.busy:
+            if not silent:
+                self.say("Please wait until the current operation has finished before updating.")
+            return
+
+        def job() -> None:
+            rel = self.pending_release
+            if rel is None:
+                if not silent:
+                    self.say("Checking for updates ...")
+                try:
+                    rel = updater.check()
+                except updater.UpdateError as e:
+                    if not silent:
+                        self.say(f"Update check failed: {e}")
+                    return
+            if rel is None:
+                if not silent:
+                    self.say(f"You are up to date (version {__version__}).")
+                return
+            self.pending_release = rel
+            self.q.put(lambda: self.btn_update.configure(text=f"Update available: v{rel.version}", style="Accent.TButton"))
+            if silent:
+                return
+            self.say(f"New version available: {rel.version}  ({rel.page})")
+            notes = (rel.notes[:700] + " …") if len(rel.notes) > 700 else rel.notes
+            if not self.ask(f"Version {rel.version} is available (you have {__version__}).\n\n{notes}\n\n"
+                            "Download and install it now? The program will restart, so anything loaded "
+                            "(systems, preview) will have to be loaded again."):
+                self.say("Update postponed."); return
+            self._install_update(rel)
+        self.work(job)
+
+    def _install_update(self, rel: "updater.Release") -> None:
+        if not updater.is_frozen():
+            self.say("This copy runs from source, so it cannot replace itself. "
+                     f"Get the packaged program from {rel.page or 'the GitHub Releases page'} "
+                     "(or update the source with git pull).")
+            return
+        def prog(got: int, total: int) -> None:
+            if total:
+                self.q.put(lambda: self.progress.configure(maximum=total, value=got))
+        self.say(f"Downloading {rel.version} ...")
+        f = updater.download(rel, Path.home() / ".tcx-bulk" / "update", kind=updater.current_kind(), progress=prog)
+        self.say("Downloaded and verified (SHA-256). Installing ...")
+        exe = updater.install(f)
+        self.say(f"Updated to {rel.version}. Restarting ...")
+        self.q.put(lambda: self.progress.configure(value=0))
+        self.q.put(lambda: self.restart(str(exe)))
+
     def rollback_run(self) -> None:
         if not self.systems:
             self.say("Import your KeePass CSV first (needed to log in to each system)."); return
@@ -618,6 +679,8 @@ class App(ttk.Frame):
 
 
 def main() -> int:
+    if updater.is_frozen():
+        updater.cleanup_old()  # remove the previous version left behind by an update
     try:  # sharp text on high-DPI Windows screens
         import ctypes
         ctypes.windll.shcore.SetProcessDpiAwareness(1)  # type: ignore[attr-defined]

@@ -14,6 +14,7 @@ from .bulk import (
     PlanError, build_plan, execute, export_records, format_op, guess_key,
     read_csv, rollback, summarize, write_csv,
 )
+from . import __version__, updater
 from .client import ApiError, XapiClient
 from .multi import (check_all, describe, has_system_col, plan_all, resolve_pool, rollback_multi,
                     run_multi, split_rows, totals, write_plan_csv, safe_name)
@@ -88,6 +89,38 @@ def new_run_dir(base: str) -> Path:
 
 
 # ------------------------------------------------------------ commands
+def cmd_update(args) -> int:
+    print(f"tcx-bulk {__version__}")
+    try:
+        rel = updater.check()
+    except updater.UpdateError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    if rel is None:
+        print("You are up to date.")
+        return 0
+    print(f"New version available: {rel.version}  ({rel.page})")
+    if rel.notes:
+        print("\n" + rel.notes[:1500] + "\n")
+    if args.check_only:
+        return 0
+    if not updater.is_frozen():
+        print("This copy runs from source, so it cannot replace itself. Update it with git pull / pip install -U.")
+        return 1
+    if not args.yes and input("Install it now? Type YES to confirm: ").strip().upper() != "YES":
+        print("Cancelled.")
+        return 1
+    try:
+        tmp = Path(os.environ.get("TEMP") or "/tmp") / "tcx-bulk-update"
+        f = updater.download(rel, tmp, kind="cli", progress=None)
+        updater.install(f)
+    except updater.UpdateError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+    print(f"Updated to {rel.version}. Run the program again to use the new version.")
+    return 0
+
+
 def cmd_systems(args) -> int:
     try:
         systems, warnings = load_systems(args.file)
@@ -310,7 +343,13 @@ def build_parser() -> argparse.ArgumentParser:
     ent.add_argument("--entity", default="Users", help="XAPI entity (default: Users = extensions)")
 
     p = argparse.ArgumentParser(prog="tcx-bulk", description="Bulk changes in 3CX through the API (from CSV).")
+    p.add_argument("--version", action="version", version=f"tcx-bulk {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("update", help="check for a new version and install it (packaged program only)")
+    sp.add_argument("--check-only", action="store_true", help="only report, do not install")
+    sp.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    sp.set_defaults(fn=cmd_update)
 
     sp = sub.add_parser("systems", help="show the systems found in a KeePass CSV export (no passwords)")
     sp.add_argument("file")
@@ -353,6 +392,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     load_dotenv()
+    if updater.is_frozen():
+        updater.cleanup_old()
     args = build_parser().parse_args(argv)
     try:
         return args.fn(args)

@@ -136,6 +136,32 @@ The tool is **idempotent**: if the value on the PBX already equals the one in th
 
 ---
 
+## Updating the program
+
+**Click "Check for updates" in the top right corner of the window.** If a newer version exists, the button turns blue ("Update available: vX.Y.Z"). Click it, read the release notes, and confirm. The program then:
+1. downloads the new version from the project's GitHub Releases,
+2. **verifies its SHA-256 checksum** (a damaged or altered file is rejected and nothing is installed),
+3. replaces its own file and restarts. No installer, no manual download. Your settings and backups live in your home folder and are not touched.
+
+The packaged program also checks quietly in the background a couple of seconds after start-up and only marks the button (it never installs anything without you clicking). Set the environment variable `TCX_NO_UPDATE_CHECK=1` to switch that off.
+
+Notes:
+- It works only for the packaged program (`.exe` / Linux binary), not when running from source.
+- The program file must sit in a folder you can write to (Desktop, Documents, a tools folder). `C:\Program Files` needs administrator rights.
+- The file is not code-signed, so Windows SmartScreen may warn about a new version on first start, as with the first download. An update is refused while an operation (preview/apply) is running.
+- Terminal version: `tcx-bulk update` (or `tcx-bulk update --check-only`).
+- The update source is this repository's **public** Releases (`TCX_UPDATE_REPO=owner/name` points to another one). If the repository is private, the check says that it found no release.
+- Without internet access to github.com, use the "Releases" page on another machine and copy the new file over the old one.
+
+### Publishing a new version (for the maintainer)
+1. Change `__version__` in `src/tcx_bulk/__init__.py` and `version` in `pyproject.toml` (e.g. `0.2.1`), commit and push.
+2. Tag and push the tag: `git tag v0.2.1 && git push origin v0.2.1`.
+3. GitHub Actions builds Windows + Linux, creates the Release **with `SHA256SUMS.txt`** and the build fails if the tag and the program version differ. Within a few minutes everyone's "Check for updates" button sees it.
+
+To make the repository public: GitHub → the repository → **Settings → General → scroll to "Danger Zone" → Change visibility → Make public**. Before you do: everything in the repo, and its full history, becomes visible to anyone. Never commit real credentials or KeePass exports (they are in `.gitignore`).
+
+---
+
 ## Known limitations and issues (honest list)
 
 - **This tool has not yet been tested against a real 3CX PBX.** It was written from the [official Configuration API specification](https://www.3cx.com/docs/configuration-rest-api-endpoints/) and tested against a simulated PBX (22 automated tests). So **do your first test on a single test user**, e.g. changing only `FirstName`.

@@ -104,3 +104,50 @@ def test_import_rejects_non_keepass_file(tmp_path, monkeypatch):
     app.import_systems()
     assert app.systems == [] and "KeePass" in app.log.get("1.0", "end")
     root.destroy()
+
+
+def _app_with_update(tmp_path, monkeypatch, frozen, answer=True):
+    from tcx_bulk import updater
+    monkeypatch.setattr(gui, "CONFIG", tmp_path / "profile.json")
+    monkeypatch.setattr(gui.Path, "home", classmethod(lambda cls: tmp_path))
+    calls = {}
+    rel = updater.Release("v9.0.0", "9.0.0", "- shiny things", "https://github.com/x/y/releases/tag/v9.0.0", {})
+    monkeypatch.setattr(updater, "check", lambda *a, **k: rel)
+    monkeypatch.setattr(updater, "is_frozen", lambda: frozen)
+    monkeypatch.setattr(updater, "download", lambda r, d, **k: calls.setdefault("dl", tmp_path / "x"))
+    monkeypatch.setattr(updater, "install", lambda f, *a, **k: calls.setdefault("inst", "/app/tcx-bulk-gui"))
+    root = tk.Tk()
+    app = gui.App(root, sync=True, confirm=lambda t, m: calls.setdefault("asked", []) .append(m) or answer)
+    app.restart = lambda exe: calls.setdefault("restart", exe)
+    return root, app, calls
+
+
+def test_update_button_installs_and_restarts(tmp_path, monkeypatch):
+    root, app, calls = _app_with_update(tmp_path, monkeypatch, frozen=True)
+    app.check_updates()
+    assert "Update available" in app.btn_update["text"]
+    assert "9.0.0" in calls["asked"][0] and "shiny" in calls["asked"][0]
+    assert "inst" in calls and calls["restart"] == "/app/tcx-bulk-gui"
+    root.destroy()
+
+
+def test_update_declined_changes_nothing(tmp_path, monkeypatch):
+    root, app, calls = _app_with_update(tmp_path, monkeypatch, frozen=True, answer=False)
+    app.check_updates()
+    assert "inst" not in calls and "restart" not in calls and "postponed" in app.log.get("1.0", "end")
+    root.destroy()
+
+
+def test_update_from_source_only_explains(tmp_path, monkeypatch):
+    root, app, calls = _app_with_update(tmp_path, monkeypatch, frozen=False)
+    app.check_updates()
+    assert "inst" not in calls and "runs from source" in app.log.get("1.0", "end")
+    root.destroy()
+
+
+def test_update_blocked_while_busy(tmp_path, monkeypatch):
+    root, app, calls = _app_with_update(tmp_path, monkeypatch, frozen=True)
+    app.busy = 1
+    app.check_updates()
+    assert "asked" not in calls and "wait" in app.log.get("1.0", "end").lower()
+    root.destroy()
