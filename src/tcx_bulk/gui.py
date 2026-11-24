@@ -70,6 +70,8 @@ class App(ttk.Frame):
         self._build()
         self._load_profile()
         self.after(100, self._pump)
+        self.say(f"Welcome to 3CX Bulk Tool {__version__}. Start on the left: import your systems from a CSV export, "
+                 "or open the \"Single PBX\" tab to connect to one PBX.")
         if not sync and updater.is_frozen() and not os.environ.get("TCX_NO_UPDATE_CHECK"):
             self.after(2000, lambda: self.check_updates(silent=True))  # quietly marks the button if there is news
 
