@@ -4,6 +4,15 @@ tcx-runs/
 __pycache__/
 .pytest_cache/
 .venv/
+# password exports - NEVER commit these
+*keepass*.csv
+*keepass*.json
+*.kdbx
+systems*.csv
+
 # exports from the PBX contain personal data (GDPR) - never commit them
 export_*.csv
 export_*.json
+
+# harmless example files (fake data only)
+!examples/*.csv

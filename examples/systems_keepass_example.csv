@@ -1,0 +1,3 @@
+Group,Title,Username,Password,URL,Notes
+Root/PBX,acme,100,REPLACE-WITH-API-KEY,https://pbx.acme.ie,example only - not real credentials
+Root/PBX,beta,100,REPLACE-WITH-API-KEY,https://pbx.beta.ie,example only - not real credentials

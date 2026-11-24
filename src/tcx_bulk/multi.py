@@ -10,7 +10,7 @@ from typing import Callable, Dict, List, Optional
 from .bulk import (Op, PlanError, build_plan, execute, format_op, guess_key, rollback, summarize,
                    write_csv)
 from .client import ApiError, XapiClient
-from .systems import System
+from .systems import System, SystemsError
 
 SYSTEM_COL = "system"
 ClientFactory = Callable[[System], XapiClient]
@@ -33,9 +33,35 @@ def safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or "system"
 
 
+def has_system_col(headers: List[str]) -> bool:
+    return SYSTEM_COL in [h.lower() for h in headers]
+
+
+def resolve_pool(systems: List[System], headers: List[str], rows: List[Dict[str, str]],
+                 chosen: Optional[List[System]]):
+    """Decide which systems a change file applies to.
+
+    * CSV has a 'system' column -> the systems named in it (narrowed to `chosen` if given).
+    * otherwise                 -> `chosen` (must be given: we never default to "all 150").
+    Returns (pool, names_in_csv_that_are_not_available)."""
+    if has_system_col(headers):
+        sc = next(h for h in headers if h.lower() == SYSTEM_COL)
+        names = {r.get(sc, "").strip().lower() for r in rows if r.get(sc, "").strip()}
+        known = {s.name.lower(): s for s in systems}
+        pool = [s for n, s in known.items() if n in names]
+        if chosen:
+            pool = [s for s in pool if s in chosen]
+        gone = sorted(n for n in names if n not in {s.name.lower() for s in pool})
+        return pool, gone
+    if not chosen:
+        raise SystemsError("Select the systems first (CLI: --all, --select or --group; "
+                           "or add a 'system' column to the CSV).")
+    return list(chosen), []
+
+
 def split_rows(headers: List[str], rows: List[Dict[str, str]], selected: List[System]):
     """Returns (headers_without_system_col, {system name: rows}, [rows for unknown systems])."""
-    if SYSTEM_COL not in [h.lower() for h in headers]:
+    if not has_system_col(headers):
         return headers, {s.name: rows for s in selected}, []
     sc = next(h for h in headers if h.lower() == SYSTEM_COL)
     by_name = {s.name.lower(): s.name for s in selected}
@@ -43,7 +69,7 @@ def split_rows(headers: List[str], rows: List[Dict[str, str]], selected: List[Sy
     unknown = []
     for r in rows:
         nm = by_name.get(r.get(sc, "").strip().lower())
-        (out.setdefault(nm, []) if nm else unknown).append(r) if nm else unknown.append(r)
+        out.setdefault(nm, []).append(r) if nm else unknown.append(r)
     return [h for h in headers if h != sc], out, unknown
 
 

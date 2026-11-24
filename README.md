@@ -39,9 +39,50 @@ The tool logs in to the PBX with an "API key", not with your admin password.
 
 ---
 
+## Working with many PBX systems (e.g. 150) and KeePass
+
+You do **not** have to type credentials for every system. Export the entries from KeePass to CSV and import that file into the tool. It reads the **name, user name (= Client ID), password (= API key) and URL (= PBX address)** of every entry.
+
+**Preparing the KeePass export**
+1. Keep your PBX entries in their own KeePass group, with: *Title* = a unique short name (e.g. `acme`), *User name* = the 3CX API Client ID, *Password* = the API key, *URL* = the PBX address (e.g. `https://pbx.acme.ie`).
+2. Export **only that group** (KeePass: *File → Export → CSV*; KeePassXC: *Database → Export to CSV*). Both formats are supported.
+3. The export contains **passwords in plain text**. Keep it on an encrypted disk and **delete it when you are done**. The tool only reads it: it never copies it, never saves the passwords anywhere and never prints them. `.gitignore` blocks `*keepass*.csv` and `systems*.csv` so it is not committed by accident.
+4. Entries that are not PBXs but have a URL (websites, etc.) are indistinguishable from PBXs, so they are listed too. Do not select them (exporting only the PBX group avoids the problem). Entries without a user, password or host name are skipped and reported.
+
+**In the window**: click **Import systems from KeePass CSV…**, filter the list, select the systems (or **Select all shown**), then **Connect and test** checks the login to every selected system at once.
+
+**Which systems does a change file apply to?**
+- If the CSV has a **`system` column** (the KeePass *Title*), each row goes to the system it names. That lets one file change different things on different systems.
+- Without a `system` column, the same file is applied to **all the systems you selected**. In the CLI you must say which ones (`--select`, `--group` or `--all`). The tool never defaults to "all 150".
+
+```csv
+system,Number,FirstName,EmailAddress
+acme,100,John,john.murphy@acme.ie
+beta,100,Aoife,aoife.byrne@beta.ie
+```
+
+**Safety for multi-system runs**
+- **Preview for every system** (and a full `plan_changes.csv`) before anything happens. Nothing is changed in dry-run.
+- **Pilot first** (on by default): the first system is changed, then the tool asks before continuing with the rest. If the pilot has errors, everything stops and no other system is touched.
+- **One failing system does not block the others** (unreachable PBX, wrong key, a row that fails). A `summary.csv` lists the result for each system.
+- **A separate backup per system** (`<run folder>/<system>/backup.json`). **Undo a whole run…** (CLI: `rollback <run folder> --systems keepass.csv --execute`) restores every system.
+- Planning uses a few parallel connections (default 4, `--workers`); changes are applied one system at a time.
+
+```bash
+tcx-bulk systems keepass.csv                         # show what was found (no passwords)
+tcx-bulk check --systems keepass.csv --group Customers          # test the login to every system
+tcx-bulk apply changes.csv --systems keepass.csv --select "acme,beta*"   # preview
+tcx-bulk apply changes.csv --systems keepass.csv --select "acme,beta*" --execute
+tcx-bulk apply changes.csv --systems keepass.csv --execute      # CSV has a 'system' column
+tcx-bulk export -o exports/ --systems keepass.csv --group Customers
+```
+You can also set `TCX_SYSTEMS=/path/to/keepass.csv` in `.env`. In multi-system mode `--limit N` means "only the first N systems that have changes".
+
+---
+
 ## Desktop window (GUI): step by step
 
-1. Start `tcx-bulk-gui`. Enter the **PBX address**, **Client ID** and **Client Secret**, then click **Connect and test**.
+1. Start `tcx-bulk-gui`. For many systems, import them from KeePass first (section above). For a single PBX, enter the **PBX address**, **Client ID** and **Client Secret**, then click **Connect and test**.
    The address and Client ID are remembered for next time. **The secret is never written to disk.**
 2. In section 2, pick the **Entity**. The default is `Users` (extensions / users). After connecting, the list contains **every entity your PBX exposes**.
 3. Click **Export current state to CSV…**. You get a file with the current data. It is your template and an extra backup.
