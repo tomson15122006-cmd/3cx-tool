@@ -246,11 +246,13 @@ def execute(
     stop_on_error: bool = False,
     delay: float = 0.0,
     progress: Optional[Callable[[str], None]] = print,
+    system_name: str = "",
 ) -> Dict[str, int]:
     """Writes the backup first, then applies the changes one by one."""
     todo = [o for o in ops if o.action in ("update", "create", "delete")]
     backup = {
         "entity": entity,
+        "system": system_name,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "entries": [
             {
