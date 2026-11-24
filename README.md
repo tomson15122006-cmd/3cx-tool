@@ -155,8 +155,9 @@ Notes:
 
 ### Publishing a new version (for the maintainer)
 1. Change `__version__` in `src/tcx_bulk/__init__.py` and `version` in `pyproject.toml` (e.g. `0.2.1`), commit and push.
-2. Tag and push the tag: `git tag v0.2.1 && git push origin v0.2.1`.
-3. GitHub Actions builds Windows + Linux, creates the Release **with `SHA256SUMS.txt`** and the build fails if the tag and the program version differ. Within a few minutes everyone's "Check for updates" button sees it.
+2. On GitHub: **Actions → "Build executables" → Run workflow**, pick the branch, type the version **with a `v`** (e.g. `v0.2.1`) and click **Run workflow**.
+   (Alternative for people who use git in a terminal: `git tag v0.2.1 && git push origin v0.2.1`.)
+3. GitHub builds Windows + Linux, creates the tag and a Release **with `SHA256SUMS.txt`**. The run fails if the version you typed differs from the program's `__version__`. A few minutes later everyone's "Check for updates" button sees it.
 
 To make the repository public: GitHub → the repository → **Settings → General → scroll to "Danger Zone" → Change visibility → Make public**. Before you do: everything in the repo, and its full history, becomes visible to anyone. Never commit real credentials or KeePass exports (they are in `.gitignore`).
 
