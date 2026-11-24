@@ -36,7 +36,7 @@ jobs:
         run: xvfb-run -a python -m pytest -q
       - name: Build executables
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name tcx-bulk-gui --paths src packaging/gui_entry.py
+          pyinstaller --noconfirm --onefile --windowed --collect-data sv_ttk --name tcx-bulk-gui --paths src packaging/gui_entry.py
           pyinstaller --noconfirm --onefile --name tcx-bulk --paths src packaging/cli_entry.py
       - name: Smoke test (CLI --help)
         run: ./dist/tcx-bulk --help

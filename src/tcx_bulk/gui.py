@@ -15,9 +15,15 @@ import re
 import threading
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 from typing import Callable, List, Optional
+
+try:  # modern look (Windows 11 style); falls back to the default theme if missing
+    import sv_ttk
+except Exception:  # noqa: BLE001
+    sv_ttk = None
 
 from . import __version__
 from .bulk import (PlanError, build_plan, execute, export_records, format_op, guess_key,
@@ -27,6 +33,10 @@ from .multi import (SystemPlan, check_all, describe, has_system_col, plan_all, r
                     rollback_multi, run_multi, split_rows, totals, write_plan_csv)
 from .systems import System, SystemsError, load_systems
 
+PALETTE = {  # colours of the preview rows: light / dark theme
+    "light": {"update": "#0f5fb4", "create": "#107c10", "delete": "#c42b1c", "error": "#c42b1c", "muted": "#6b6b6b"},
+    "dark": {"update": "#6cb8ff", "create": "#6ccb5f", "delete": "#ff99a4", "error": "#ff99a4", "muted": "#a0a0a0"},
+}
 CONFIG = Path.home() / ".tcx-bulk" / "profile.json"
 RUNS = Path.home() / "tcx-bulk-runs"
 COMMON_ENTITIES = ["Users", "Groups", "Queues", "RingGroups", "Trunks", "Parkings", "Peers", "Receptionists"]
@@ -37,7 +47,7 @@ KEEPASS_WARNING = ("NOTE: a KeePass CSV export contains passwords in plain text.
 class App(ttk.Frame):
     def __init__(self, master: tk.Tk, client_factory: Optional[Callable[..., XapiClient]] = None,
                  sync: bool = False, confirm: Optional[Callable[[str, str], bool]] = None):
-        super().__init__(master, padding=10)
+        super().__init__(master, padding=16)
         self.master, self.sync = master, sync  # sync=True: no threads (for tests)
         self.client_factory = client_factory or XapiClient
         self.confirm = confirm or (lambda title, msg: messagebox.askyesno(title, msg, icon="warning"))
@@ -50,7 +60,8 @@ class App(ttk.Frame):
         self.key = ""
         self.q: "queue.Queue[Callable[[], None]]" = queue.Queue()
         master.title(f"3CX Bulk Tool {__version__}")
-        master.geometry("1040x900")
+        master.geometry("1240x820")
+        master.minsize(1100, 720)
         self.pack(fill="both", expand=True)
         self._build()
         self._load_profile()
@@ -63,67 +74,175 @@ class App(ttk.Frame):
         self.allow_create = tk.BooleanVar(value=False)
         self.allow_delete = tk.BooleanVar(value=False)
         self.pilot = tk.BooleanVar(value=True)
+        self.summary = tk.StringVar(value="Load a CSV file to see a preview of the changes.")
+        self.theme = "light"
+        if sv_ttk:
+            sv_ttk.set_theme(self.theme)
+        base = tkfont.nametofont("TkDefaultFont").actual()["family"]
+        self.f_title = (base, 20, "bold")
+        self.f_sub = (base, 10)
+        self.f_head = (base, 11, "bold")
+        self.columnconfigure(0, weight=0); self.columnconfigure(1, weight=1)
+        self.rowconfigure(1, weight=1)
 
-        box = ttk.LabelFrame(self, text="1. Systems", padding=8)
-        box.pack(fill="x")
-        top = ttk.Frame(box); top.pack(fill="x")
-        ttk.Button(top, text="Import systems from KeePass CSV…", command=self.import_systems).pack(side="left")
-        self.sys_label = ttk.Label(top, text="  No systems imported (or connect to a single PBX below)")
-        self.sys_label.pack(side="left")
-        row = ttk.Frame(box); row.pack(fill="x", pady=3)
-        ttk.Label(row, text="Filter").pack(side="left")
-        e = ttk.Entry(row, textvariable=self.v["filter"], width=24); e.pack(side="left", padx=4)
+        # ---- header
+        hdr = ttk.Frame(self); hdr.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        tt = ttk.Frame(hdr); tt.pack(side="left")
+        ttk.Label(tt, text="3CX Bulk Tool", font=self.f_title).pack(anchor="w")
+        ttk.Label(tt, text=f"Bulk changes for 3CX through the API  ·  v{__version__}", font=self.f_sub, foreground="#7a7a7a").pack(anchor="w")
+        self.btn_theme = ttk.Button(hdr, text="Dark mode", command=self.toggle_theme)
+        self.btn_theme.pack(side="right")
+        self.status = ttk.Label(hdr, text="Not connected", foreground="#c42b1c", font=self.f_head)
+        self.status.pack(side="right", padx=16)
+
+        # ---- left column: systems
+        left = ttk.Frame(self); left.grid(row=1, column=0, sticky="ns", padx=(0, 14))
+        card = ttk.LabelFrame(left, text=" 1  Systems ", padding=12)
+        card.pack(fill="both", expand=True)
+        ttk.Button(card, text="Import from KeePass CSV…", style="Accent.TButton", command=self.import_systems).pack(fill="x")
+        self.sys_label = ttk.Label(card, text="No systems imported", foreground="#7a7a7a")
+        self.sys_label.pack(anchor="w", pady=(6, 8))
+        ttk.Entry(card, textvariable=self.v["filter"]).pack(fill="x")
         self.v["filter"].trace_add("write", lambda *_: self._fill_list())
-        ttk.Button(row, text="Select all shown", command=self.select_all_shown).pack(side="left", padx=4)
-        ttk.Button(row, text="Clear selection", command=self.clear_selection).pack(side="left")
-        self.sel_label = ttk.Label(row, text=""); self.sel_label.pack(side="right")
-        lf = ttk.Frame(box); lf.pack(fill="x")
-        self.lb = tk.Listbox(lf, selectmode="extended", height=5, exportselection=False)
+        ttk.Label(card, text="Filter by name, address or group", font=self.f_sub, foreground="#7a7a7a").pack(anchor="w", pady=(2, 6))
+        lf = ttk.Frame(card); lf.pack(fill="both", expand=True)
+        self.lb = tk.Listbox(lf, selectmode="extended", height=10, width=34, exportselection=False,
+                             borderwidth=0, highlightthickness=1, activestyle="none", font=(base, 10))
         sb = ttk.Scrollbar(lf, command=self.lb.yview); self.lb.configure(yscrollcommand=sb.set)
-        self.lb.pack(side="left", fill="x", expand=True); sb.pack(side="right", fill="y")
+        self.lb.pack(side="left", fill="both", expand=True); sb.pack(side="right", fill="y")
         self.lb.bind("<<ListboxSelect>>", lambda _e: self._sync_selection())
+        row = ttk.Frame(card); row.pack(fill="x", pady=(8, 0))
+        ttk.Button(row, text="Select all shown", command=self.select_all_shown).pack(side="left")
+        ttk.Button(row, text="Clear", command=self.clear_selection).pack(side="left", padx=6)
+        self.sel_label = ttk.Label(card, text="", font=self.f_head); self.sel_label.pack(anchor="w", pady=(8, 0))
 
-        sep = ttk.LabelFrame(box, text="Or connect to a single PBX", padding=6)
-        sep.pack(fill="x", pady=(6, 0))
-        for i, (label, key, show) in enumerate([
-            ("PBX address (e.g. pbx.company.ie)", "fqdn", ""), ("Client ID", "cid", ""),
-            ("Client Secret (API Key)", "secret", "*"), ("CA file (optional)", "ca", "")]):
-            ttk.Label(sep, text=label).grid(row=i // 2, column=(i % 2) * 2, sticky="w", padx=4, pady=2)
-            ttk.Entry(sep, textvariable=self.v[key], show=show, width=26).grid(row=i // 2, column=(i % 2) * 2 + 1, padx=4, pady=2)
-        ttk.Checkbutton(sep, text="Do not verify TLS certificate (not recommended)", variable=self.insecure).grid(row=2, column=0, columnspan=2, sticky="w")
-        self.status = ttk.Label(sep, text="Not connected", foreground="#a00")
-        self.status.grid(row=2, column=2, sticky="w")
-        self.btn_connect = ttk.Button(sep, text="Connect and test", command=self.connect)
-        self.btn_connect.grid(row=2, column=3, sticky="e", pady=4)
+        self.btn_one = ttk.Button(left, text="Or connect to a single PBX  ▾", command=self._toggle_one)
+        self.btn_one.pack(fill="x", pady=(12, 0))
+        one = self.one = ttk.LabelFrame(left, text=" Single PBX ", padding=12)
+        self._one_visible = False
+        for label, key, show in [("PBX address", "fqdn", ""), ("Client ID", "cid", ""),
+                                 ("Client Secret (API key)", "secret", "*"), ("CA file (optional)", "ca", "")]:
+            ttk.Label(one, text=label, font=self.f_sub).pack(anchor="w")
+            ttk.Entry(one, textvariable=self.v[key], show=show).pack(fill="x", pady=(0, 6))
+        ttk.Checkbutton(one, text="Do not verify TLS certificate", variable=self.insecure).pack(anchor="w")
+        self.btn_connect = ttk.Button(one, text="Connect and test", command=self.connect)
+        self.btn_connect.pack(fill="x", pady=(8, 0))
+        self._toggle_one(True)  # visible until systems are imported
 
-        box = ttk.LabelFrame(self, text="2. What to change", padding=8)
-        box.pack(fill="x", pady=6)
-        ttk.Label(box, text="Entity (data type)").grid(row=0, column=0, sticky="w", padx=4)
-        self.cb_entity = ttk.Combobox(box, textvariable=self.v["entity"], values=COMMON_ENTITIES, width=30)
-        self.cb_entity.grid(row=0, column=1, padx=4)
+        # ---- right column
+        right = ttk.Frame(self); right.grid(row=1, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1); right.rowconfigure(1, weight=1)
+        card = ttk.LabelFrame(right, text=" 2  What to change ", padding=12); card.grid(row=0, column=0, sticky="ew")
+        card.columnconfigure(1, weight=1)
+        ttk.Label(card, text="Entity").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.cb_entity = ttk.Combobox(card, textvariable=self.v["entity"], values=COMMON_ENTITIES, width=24)
+        self.cb_entity.grid(row=0, column=1, sticky="w")
         self.v["entity"].set("Users")
-        ttk.Label(box, text="Key column (empty = auto)").grid(row=0, column=2, sticky="w", padx=4)
-        ttk.Entry(box, textvariable=self.v["key"], width=16).grid(row=0, column=3, padx=4)
-        ttk.Button(box, text="Export current state to CSV…", command=self.export).grid(row=0, column=4, padx=8)
+        ttk.Label(card, text="Key column").grid(row=0, column=2, sticky="w", padx=(20, 8))
+        ttk.Entry(card, textvariable=self.v["key"], width=14).grid(row=0, column=3)
+        ttk.Label(card, text="(empty = auto)", font=self.f_sub, foreground="#7a7a7a").grid(row=0, column=4, padx=6)
+        ttk.Button(card, text="Export current state to CSV…", command=self.export).grid(row=0, column=5, padx=(20, 0))
+        r2 = ttk.Frame(card); r2.grid(row=1, column=0, columnspan=6, sticky="w", pady=(12, 0))
+        ttk.Button(r2, text="Load CSV file…", style="Accent.TButton", command=self.load_csv).pack(side="left")
+        ttk.Label(r2, text="  preview only, nothing is changed yet", font=self.f_sub, foreground="#7a7a7a").pack(side="left")
+        ttk.Checkbutton(r2, text="Allow creating", variable=self.allow_create).pack(side="left", padx=(24, 8))
+        ttk.Checkbutton(r2, text="Allow deleting", variable=self.allow_delete).pack(side="left")
 
-        box = ttk.LabelFrame(self, text="3. Import CSV and preview", padding=8)
-        box.pack(fill="x")
-        ttk.Button(box, text="Load CSV (preview only)…", command=self.load_csv).pack(side="left")
-        ttk.Checkbutton(box, text="Allow creating (action=create)", variable=self.allow_create).pack(side="left", padx=10)
-        ttk.Checkbutton(box, text="Allow deleting (action=delete)", variable=self.allow_delete).pack(side="left")
+        card = ttk.LabelFrame(right, text=" 3  Preview of the changes ", padding=10)
+        card.grid(row=1, column=0, sticky="nsew", pady=12)
+        card.columnconfigure(0, weight=1); card.rowconfigure(1, weight=1)
+        ttk.Label(card, textvariable=self.summary, font=self.f_head).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        cols = ("system", "line", "action", "key", "field", "old", "new")
+        self.tree = ttk.Treeview(card, columns=cols, show="headings", height=10)
+        for c, w, t in (("system", 120, "System"), ("line", 46, "Row"), ("action", 80, "Action"), ("key", 80, "Key"),
+                        ("field", 130, "Field"), ("old", 190, "Current value"), ("new", 220, "New value")):
+            self.tree.heading(c, text=t); self.tree.column(c, width=w, anchor="w", stretch=c in ("old", "new"))
+        ys = ttk.Scrollbar(card, command=self.tree.yview); self.tree.configure(yscrollcommand=ys.set)
+        self.tree.grid(row=1, column=0, sticky="nsew"); ys.grid(row=1, column=1, sticky="ns")
+        self.tree.bind("<Double-1>", self._row_details)  # full text of a row goes to the log
+        ttk.Label(card, text="Double-click a row to see its full text in the log.", font=self.f_sub,
+                  foreground="#7a7a7a").grid(row=2, column=0, sticky="w", pady=(4, 0))
 
-        box = ttk.LabelFrame(self, text="4. Execute", padding=8)
-        box.pack(fill="x", pady=6)
-        self.btn_apply = ttk.Button(box, text="APPLY CHANGES", command=self.apply, state="disabled")
+        card = ttk.LabelFrame(right, text=" 4  Apply ", padding=12); card.grid(row=2, column=0, sticky="ew")
+        self.btn_apply = ttk.Button(card, text="Apply changes", style="Accent.TButton", command=self.apply, state="disabled")
         self.btn_apply.pack(side="left")
-        ttk.Button(box, text="Undo changes from a backup…", command=self.rollback).pack(side="left", padx=10)
-        ttk.Button(box, text="Undo a whole run…", command=self.rollback_run).pack(side="left")
-        ttk.Checkbutton(box, text="Pilot first (multi-system)", variable=self.pilot).pack(side="left", padx=10)
-        self.progress = ttk.Progressbar(box, mode="determinate", length=200)
+        ttk.Checkbutton(card, text="Pilot first (multi-system)", variable=self.pilot).pack(side="left", padx=16)
+        ttk.Button(card, text="Undo from a backup…", command=self.rollback).pack(side="left")
+        ttk.Button(card, text="Undo a whole run…", command=self.rollback_run).pack(side="left", padx=8)
+        self.progress = ttk.Progressbar(card, mode="determinate", length=180)
         self.progress.pack(side="right")
 
-        self.log = scrolledtext.ScrolledText(self, height=16, font=("Courier", 10), state="disabled")
+        # ---- log
+        lg = ttk.LabelFrame(self, text=" Log ", padding=6); lg.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self.log = scrolledtext.ScrolledText(lg, height=7, font=tkfont.nametofont("TkFixedFont"), state="disabled",
+                                             borderwidth=0, highlightthickness=0, wrap="word")
         self.log.pack(fill="both", expand=True)
+        self._recolor()
+
+    def _toggle_one(self, show: Optional[bool] = None) -> None:
+        show = (not self._one_visible) if show is None else show
+        if show:
+            self.one.pack(fill="x", pady=(6, 0))
+        else:
+            self.one.pack_forget()
+        self._one_visible = show
+        self.btn_one.configure(text="Or connect to a single PBX  " + ("▴" if show else "▾"))
+
+    def _row_details(self, _event=None) -> None:
+        for item in self.tree.selection():
+            v = self.tree.item(item, "values")
+            self._say("  ".join(str(x) for x in v if str(x) != ""))
+
+    def _recolor(self) -> None:
+        pal = PALETTE[self.theme]
+        for tag in ("update", "create", "delete", "error"):
+            self.tree.tag_configure(tag, foreground=pal[tag])
+        dark = self.theme == "dark"
+        bg, fg = ("#1c1c1c", "#e6e6e6") if dark else ("#ffffff", "#1a1a1a")
+        self.log.configure(background=bg, foreground=fg, insertbackground=fg)
+        self.lb.configure(background=bg, foreground=fg, selectbackground="#0f6cbd", selectforeground="#ffffff",
+                          highlightbackground="#3a3a3a" if dark else "#d0d0d0", highlightcolor="#0f6cbd")
+
+    def toggle_theme(self) -> None:
+        self.theme = "dark" if self.theme == "light" else "light"
+        if sv_ttk:
+            sv_ttk.set_theme(self.theme)
+        self.btn_theme.configure(text="Light mode" if self.theme == "dark" else "Dark mode")
+        self._recolor()
+
+    def _clear_preview(self, text: str = "") -> None:
+        self.tree.delete(*self.tree.get_children())
+        if text:
+            self.summary.set(text)
+
+    def _add_op(self, system: str, o: Op) -> None:
+        if o.action in ("update", "create") and o.changes:
+            for f, (old, new) in o.changes.items():
+                self.tree.insert("", "end", tags=(o.action,), values=(
+                    system, o.line, o.action, o.key, f, "" if old is None else str(old), str(new)))
+        elif o.action == "delete":
+            self.tree.insert("", "end", tags=("delete",), values=(system, o.line, "delete", o.key, "(whole record)", o.label, ""))
+        elif o.action == "error":
+            self.tree.insert("", "end", tags=("error",), values=(system, o.line, "ERROR", o.key, "", "", o.message))
+
+    def _show_plans(self, plans: List[SystemPlan]) -> None:
+        def ui() -> None:
+            self._clear_preview()
+            shown = 0
+            for p in plans:
+                if p.error:
+                    self.tree.insert("", "end", tags=("error",), values=(p.system.name, "", "ERROR", "", "", "", p.error))
+                for o in p.ops:
+                    if shown < 5000:
+                        self._add_op(p.system.name, o); shown += 1
+        self.q.put(ui)
+
+    def _show_ops(self, ops: List[Op]) -> None:
+        def ui() -> None:
+            self._clear_preview()
+            for o in ops[:5000]:
+                self._add_op("", o)
+        self.q.put(ui)
 
     def _load_profile(self) -> None:
         try:
@@ -242,7 +361,8 @@ class App(ttk.Frame):
         except (SystemsError, OSError, UnicodeDecodeError) as e:
             self.say(f"ERROR: {e}"); return
         self.systems, self.chosen, self.client = systems, set(), None
-        self.sys_label.configure(text=f"  {len(systems)} systems imported from {Path(path).name}")
+        self.sys_label.configure(text=f"{len(systems)} systems imported from {Path(path).name}")
+        self._toggle_one(False)
         self._fill_list()
         self.say(f"Imported {len(systems)} systems ({len(warnings)} entries skipped). Select the ones to work on.")
         for w in warnings[:20]:
@@ -352,6 +472,7 @@ class App(ttk.Frame):
             return
         self.ops, self.plans = [], []
         self.btn_apply.configure(state="disabled")
+        self._clear_preview("Working out the changes …")
 
         def job_multi() -> None:
             pool, gone = resolve_pool(self.systems, headers, rows, sel or None)
@@ -362,9 +483,11 @@ class App(ttk.Frame):
                 self.say(f"WARNING: the CSV mentions systems that are not available/selected: {', '.join(gone)}")
             plans = plan_all(pool, h2, by_sys, entity, self.v["key"].get().strip() or None, self.factory(),
                              self.allow_create.get(), self.allow_delete.get())
-            for line in describe(plans):
-                self.say(line)
+            self._show_plans(plans)
             t = totals(plans)
+            self.q.put(lambda: self.summary.set(
+                f"{t['systems']} systems  ·  {t['update']} updates  ·  {t['create']} creates  ·  {t['delete']} deletes  ·  "
+                f"{t['error'] + t['systems_failed_to_plan']} errors"))
             self.say(f"\nSUMMARY: {t['systems']} systems ({t['systems_with_changes']} with changes, "
                      f"{t['systems_failed_to_plan']} could not be planned); updates={t['update']}, "
                      f"creates={t['create']}, deletes={t['delete']}, row errors={t['error']}")
@@ -382,10 +505,10 @@ class App(ttk.Frame):
             self.key = self._key_for(recs)
             self.say(f"Entity: {entity}, key column: {self.key}")
             ops = build_plan(rows, headers, recs, self.key, self.allow_create.get(), self.allow_delete.get())
-            for o in ops:
-                if o.action != "nochange":
-                    self.say(format_op(o))
             s = summarize(ops)
+            self._show_ops(ops)
+            self.q.put(lambda: self.summary.set(
+                f"{s['update']} updates  ·  {s['create']} creates  ·  {s['delete']} deletes  ·  {s['nochange']} unchanged  ·  {s['error']} errors"))
             self.say(f"\nSUMMARY: updates={s['update']}, creates={s['create']}, deletes={s['delete']}, "
                      f"no changes={s['nochange']}, errors={s['error']}")
             self.ops = ops
@@ -495,6 +618,11 @@ class App(ttk.Frame):
 
 
 def main() -> int:
+    try:  # sharp text on high-DPI Windows screens
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - not Windows
+        pass
     root = tk.Tk()
     App(root)
     root.mainloop()

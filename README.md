@@ -159,7 +159,7 @@ Building the executables locally (on a given OS, for that OS only):
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed --name tcx-bulk-gui --paths src packaging/gui_entry.py
+pyinstaller --onefile --windowed --collect-data sv_ttk --name tcx-bulk-gui --paths src packaging/gui_entry.py
 pyinstaller --onefile --name tcx-bulk --paths src packaging/cli_entry.py
 ```
 
