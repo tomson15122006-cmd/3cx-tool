@@ -1,4 +1,4 @@
-"""Udawana centrala 3CX (adapter dla requests) - do testow bez prawdziwego PBX."""
+"""Simulated 3CX PBX (a requests adapter) - for tests without a real PBX."""
 import json
 import re
 from urllib.parse import parse_qs, urlparse
@@ -31,7 +31,7 @@ class FakePBX(BaseAdapter):
         }
         self.calls = []  # (method, path, body)
         self.token_calls = 0
-        self.fail_next = []  # np. [503, 503] - kolejne odpowiedzi bledu
+        self.fail_next = []  # e.g. [503, 503] - the next error responses
         self.expire_token_once = False
         self.valid_token = "tok1"
         self.next_id = 100
@@ -62,7 +62,7 @@ class FakePBX(BaseAdapter):
             self.expire_token_once = False
             return self._resp(req, 401, {})
         if self.fail_next:
-            return self._resp(req, self.fail_next.pop(0), {"error": {"message": "chwilowy blad"}})
+            return self._resp(req, self.fail_next.pop(0), {"error": {"message": "temporary error"}})
         body = json.loads(req.body) if req.body else None
         rel = path.replace("/xapi/v1/", "", 1)
         self.calls.append((req.method, rel, body))
@@ -85,7 +85,7 @@ class FakePBX(BaseAdapter):
             return self._resp(req, 404, {"error": {"message": "no such record"}})
         if req.method == "PATCH":
             if body.get("EmailAddress") == "reject@x.ie":
-                return self._resp(req, 400, {"error": {"message": "email odrzucony"}})
+                return self._resp(req, 400, {"error": {"message": "email rejected"}})
             rec.update(body)
             return self._resp(req, 204, raw=b"")
         if req.method == "DELETE":

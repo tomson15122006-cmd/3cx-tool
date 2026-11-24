@@ -17,10 +17,10 @@ def plan(tmp_path, csv_text, pbx=None, **kw):
     return client, pbx, build_plan(rows, headers, recs, kw.pop("key", "Number"), **kw)
 
 
-# ---- klient
+# ---- client
 def test_bad_secret_gives_clear_error():
     client, _ = make_client(secret="zle")
-    with pytest.raises(ApiError, match="Logowanie nieudane"):
+    with pytest.raises(ApiError, match="Login failed"):
         client.list_all("Users")
 
 
@@ -61,13 +61,13 @@ def test_entity_name_injection_rejected():
         client.list_all("Users/../Secrets")
 
 
-# ---- typy
+# ---- types
 def test_coerce():
     assert coerce("", "x") is UNSET
     assert coerce(CLEAR_TOKEN, "x") == ""
     assert coerce("tak", True) is True and coerce("0", True) is False
     assert coerce("12", 5) == 12
-    assert coerce("0851234567", None) == "0851234567"  # zero na poczatku zostaje
+    assert coerce("0851234567", None) == "0851234567"  # leading zero is kept
     assert coerce('[{"a":1}]', []) == [{"a": 1}]
     with pytest.raises(ValueError):
         coerce("abc", 5)
@@ -79,12 +79,12 @@ def test_coerce():
 def test_plan_update_and_idempotence(tmp_path):
     _, _, ops = plan(tmp_path, "Number,EmailAddress,Enabled\n100,jan@new.ie,tak\n101,anna@old.ie,\n")
     assert [o.action for o in ops] == ["update", "nochange"]
-    assert ops[0].body == {"EmailAddress": "jan@new.ie"}  # Enabled juz true -> pomijamy
+    assert ops[0].body == {"EmailAddress": "jan@new.ie"}  # Enabled is already true -> skipped
 
 
 def test_semicolon_delimiter_and_bom(tmp_path):
-    _, _, ops = plan(tmp_path, "Number;FirstName\n100;Janusz\n")
-    assert ops[0].action == "update" and ops[0].body == {"FirstName": "Janusz"}
+    _, _, ops = plan(tmp_path, "Number;FirstName\n100;Johnny\n")
+    assert ops[0].action == "update" and ops[0].body == {"FirstName": "Johnny"}
 
 
 def test_unknown_column_aborts_whole_file(tmp_path):
@@ -103,7 +103,7 @@ def test_bad_bool_is_row_error(tmp_path):
 
 
 def test_create_delete_need_flags(tmp_path):
-    csv = "action,Number,FirstName\ncreate,300,Nowy\ndelete,199,\n"
+    csv = "action,Number,FirstName\ncreate,300,New\ndelete,199,\n"
     _, _, ops = plan(tmp_path, csv)
     assert [o.action for o in ops] == ["error", "error"]
     _, _, ops = plan(tmp_path, csv, allow_create=True, allow_delete=True)
@@ -121,31 +121,31 @@ def test_guess_key():
     assert guess_key([{"Id": 1}]) == "Id"
 
 
-# ---- wykonanie, backup, rollback
+# ---- execution, backup, rollback
 def test_dry_run_has_no_side_effects(tmp_path):
-    _, pbx, ops = plan(tmp_path, "Number,FirstName\n100,Zmiana\n")
+    _, pbx, ops = plan(tmp_path, "Number,FirstName\n100,Changed\n")
     assert not [c for c in pbx.calls if c[0] != "GET"]
 
 
 def test_execute_backup_then_rollback(tmp_path):
-    client, pbx, ops = plan(tmp_path, "Number,FirstName,EmailAddress\n100,Janusz,j@new.ie\n101,Anna,reject@x.ie\n")
+    client, pbx, ops = plan(tmp_path, "Number,FirstName,EmailAddress\n100,Johnny,j@new.ie\n101,Anna,reject@x.ie\n")
     run = tmp_path / "run"; run.mkdir()
     stats = execute(ops, client, "Users", run, progress=None)
-    assert stats == {"ok": 1, "failed": 1, "skipped": 0}  # blad jednego wiersza nie zatrzymuje reszty
-    assert pbx.data["Users"][0]["FirstName"] == "Janusz"
+    assert stats == {"ok": 1, "failed": 1, "skipped": 0}  # one failed row does not stop the rest
+    assert pbx.data["Users"][0]["FirstName"] == "Johnny"
     backup = json.loads((run / "backup.json").read_text())
     assert backup["entries"][0]["before"] == {"FirstName": "Jan", "EmailAddress": "jan@old.ie"}
-    assert "email odrzucony" in (run / "result.csv").read_text(encoding="utf-8-sig")
+    assert "email rejected" in (run / "result.csv").read_text(encoding="utf-8-sig")
 
     rollback(run / "backup.json", client, execute_it=False, progress=lambda *_: None)
-    assert pbx.data["Users"][0]["FirstName"] == "Janusz"  # dry-run nie cofa
+    assert pbx.data["Users"][0]["FirstName"] == "Johnny"  # dry-run does not undo
     rollback(run / "backup.json", client, execute_it=True, progress=lambda *_: None)
     assert pbx.data["Users"][0]["FirstName"] == "Jan"
     assert pbx.data["Users"][0]["EmailAddress"] == "jan@old.ie"
 
 
 def test_create_and_delete_execute(tmp_path):
-    client, pbx, ops = plan(tmp_path, "action,Number,FirstName\ncreate,300,Nowy\ndelete,199,\n",
+    client, pbx, ops = plan(tmp_path, "action,Number,FirstName\ncreate,300,New\ndelete,199,\n",
                             allow_create=True, allow_delete=True)
     run = tmp_path / "run"; run.mkdir()
     execute(ops, client, "Users", run, progress=None)

@@ -4,6 +4,6 @@ tcx-runs/
 __pycache__/
 .pytest_cache/
 .venv/
-# eksporty z PBX zawieraja dane osobowe (RODO) - nie wrzucaj ich do gita
+# exports from the PBX contain personal data (GDPR) - never commit them
 export_*.csv
 export_*.json

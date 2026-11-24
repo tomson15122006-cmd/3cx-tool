@@ -1,4 +1,4 @@
-"""Logika masowych zmian: wczytanie CSV, plan (dry-run), wykonanie, backup, rollback."""
+"""Bulk-change logic: read CSV, build a plan (dry-run), execute, back up, roll back."""
 from __future__ import annotations
 
 import csv
@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .client import ApiError, XapiClient
 
-CLEAR_TOKEN = "__EMPTY__"  # wpisz w komorke CSV, zeby ustawic pusta wartosc ""
+CLEAR_TOKEN = "__EMPTY__"  # put this in a CSV cell to set the value to an empty string ""
 ACTION_COL = "action"
 ACTIONS = ("update", "create", "delete")
 _TRUE = {"true", "1", "yes", "y", "tak", "t"}
@@ -18,15 +18,15 @@ _FALSE = {"false", "0", "no", "n", "nie", "f"}
 
 
 class PlanError(Exception):
-    """Blad calego pliku (np. literowka w nazwie kolumny) - przerywamy przed zmianami."""
+    """Whole-file error (e.g. a typo in a column name) - abort before any change."""
 
 
 # ---------------------------------------------------------------- CSV
 def read_csv(path: Path) -> Tuple[List[str], List[Dict[str, str]]]:
-    # utf-8-sig zjada BOM, ktory dodaje Excel
+    # utf-8-sig strips the BOM that Excel adds
     text = Path(path).read_text(encoding="utf-8-sig")
     first = text.splitlines()[0] if text.strip() else ""
-    delim = max(",;\t", key=first.count)  # Excel w PL/EU czesto zapisuje ';'
+    delim = max(",;\t", key=first.count)  # Excel in many European locales saves ';'
     reader = csv.DictReader(text.splitlines(), delimiter=delim)
     headers = [h.strip() for h in (reader.fieldnames or [])]
     rows = []
@@ -53,10 +53,10 @@ UNSET = _Unset()
 
 
 def coerce(raw: str, current: Any) -> Any:
-    """Zamienia tekst z CSV na wlasciwy typ, wzorujac sie na obecnej wartosci w PBX."""
+    """Convert CSV text to the right type, based on the current value in the PBX."""
     raw = raw.strip()
     if raw == "":
-        return UNSET  # pusta komorka = nie zmieniaj
+        return UNSET  # empty cell = leave unchanged
     if raw == CLEAR_TOKEN:
         return ""
     if isinstance(current, bool):
@@ -65,25 +65,25 @@ def coerce(raw: str, current: Any) -> Any:
             return True
         if low in _FALSE:
             return False
-        raise ValueError(f"oczekiwano tak/nie (true/false), jest {raw!r}")
+        raise ValueError(f"expected yes/no (true/false), got {raw!r}")
     if isinstance(current, int):
         try:
             return int(raw)
         except ValueError:
-            raise ValueError(f"oczekiwano liczby calkowitej, jest {raw!r}") from None
+            raise ValueError(f"expected a whole number, got {raw!r}") from None
     if isinstance(current, float):
         try:
             return float(raw.replace(",", "."))
         except ValueError:
-            raise ValueError(f"oczekiwano liczby, jest {raw!r}") from None
+            raise ValueError(f"expected a number, got {raw!r}") from None
     if isinstance(current, (dict, list)) or raw[:1] in "{[":
         try:
             return json.loads(raw)
         except ValueError as e:
-            raise ValueError(f"niepoprawny JSON: {e}") from None
+            raise ValueError(f"invalid JSON: {e}") from None
     if current is None and raw.lower() in ("true", "false"):
         return raw.lower() == "true"
-    return raw  # tekst (numery telefonow zostaja tekstem - waznie dla zer na poczatku)
+    return raw  # text (phone numbers stay text - keeps leading zeros)
 
 
 # ---------------------------------------------------------------- plan
@@ -93,9 +93,9 @@ class Op:
     action: str  # update | create | delete | nochange | error
     key: str
     rec_id: Any = None
-    changes: Dict[str, Tuple[Any, Any]] = field(default_factory=dict)  # pole -> (stare, nowe)
+    changes: Dict[str, Tuple[Any, Any]] = field(default_factory=dict)  # field -> (old, new)
     body: Dict[str, Any] = field(default_factory=dict)
-    before: Dict[str, Any] = field(default_factory=dict)  # pelny stary rekord (dla delete)
+    before: Dict[str, Any] = field(default_factory=dict)  # full old record (for delete)
     message: str = ""
     label: str = ""
 
@@ -113,9 +113,9 @@ def build_plan(
     allow_delete: bool = False,
 ) -> List[Op]:
     if key_field not in headers:
-        raise PlanError(f"Brak kolumny klucza {key_field!r} w pliku CSV (kolumny: {', '.join(headers)}).")
+        raise PlanError(f"Key column {key_field!r} is missing from the CSV file (columns: {', '.join(headers)}).")
 
-    known: Dict[str, Any] = {}  # pole -> przykladowa wartosc (do podpowiedzi typu)
+    known: Dict[str, Any] = {}  # field -> sample value (used as a type hint)
     for rec in records:
         for k, v in rec.items():
             if known.get(k) is None:
@@ -125,8 +125,8 @@ def build_plan(
         unknown = [h for h in data_cols if h not in known]
         if unknown:
             raise PlanError(
-                "Nieznane kolumny (literowka?): " + ", ".join(unknown)
-                + "\nPoprawne pola tej encji: " + ", ".join(sorted(known))
+                "Unknown columns (typo?): " + ", ".join(unknown)
+                + "\nValid fields of this entity: " + ", ".join(sorted(known))
             )
 
     index: Dict[str, List[Dict[str, Any]]] = {}
@@ -135,25 +135,25 @@ def build_plan(
 
     ops: List[Op] = []
     seen: Dict[str, int] = {}
-    for n, row in enumerate(rows, start=2):  # linia 1 = naglowek
+    for n, row in enumerate(rows, start=2):  # line 1 = header
         key = row.get(key_field, "")
         action = (row.get(ACTION_COL) or "update").lower()
         op = Op(line=n, action="error", key=key)
         ops.append(op)
         if not key:
-            op.message = f"pusty klucz {key_field}"
+            op.message = f"empty key {key_field}"
             continue
         if action not in ACTIONS:
-            op.message = f"nieznana akcja {action!r} (dozwolone: {', '.join(ACTIONS)})"
+            op.message = f"unknown action {action!r} (allowed: {', '.join(ACTIONS)})"
             continue
         if key in seen:
-            op.message = f"duplikat klucza {key!r} (juz w linii {seen[key]})"
+            op.message = f"duplicate key {key!r} (already on line {seen[key]})"
             continue
         seen[key] = n
 
         matches = index.get(key, [])
         if len(matches) > 1:
-            op.message = f"klucz {key!r} nie jest unikalny w PBX ({len(matches)} rekordow)"
+            op.message = f"key {key!r} is not unique in the PBX ({len(matches)} records)"
             continue
         rec = matches[0] if matches else None
 
@@ -161,13 +161,13 @@ def build_plan(
         try:
             if action == "create":
                 if not allow_create:
-                    op.message = "create wymaga flagi --allow-create"
+                    op.message = "create requires the --allow-create flag"
                     continue
                 if rec is not None:
-                    op.message = "rekord juz istnieje w PBX (create pominiety)"
+                    op.message = "record already exists in the PBX (create skipped)"
                     continue
                 body: Dict[str, Any] = {}
-                if key_field != "Id":  # Id nadaje sama centrala
+                if key_field != "Id":  # the PBX assigns Id itself
                     body[key_field] = coerce(key, known.get(key_field))
                 for c in data_cols:
                     v = coerce(row.get(c, ""), known.get(c))
@@ -179,7 +179,7 @@ def build_plan(
                 continue
 
             if rec is None:
-                op.message = f"nie znaleziono w PBX rekordu {key_field}={key!r}"
+                op.message = f"no record with {key_field}={key!r} found in the PBX"
                 continue
             op.rec_id = rec.get("Id")
             op.label = " ".join(
@@ -188,7 +188,7 @@ def build_plan(
 
             if action == "delete":
                 if not allow_delete:
-                    op.message = "delete wymaga flagi --allow-delete"
+                    op.message = "delete requires the --allow-delete flag"
                     continue
                 op.action, op.before = "delete", rec
                 continue
@@ -207,7 +207,7 @@ def build_plan(
 
 
 def guess_key(records: List[Dict[str, Any]]) -> str:
-    """Wybiera kolumne identyfikujaca rekord: Number (rozszerzenia), potem Name, na koncu Id."""
+    """Pick the column that identifies a record: Number (extensions), then Name, then Id."""
     fields = {k for r in records for k in r}
     for cand in ("Number", "Name", "Id"):
         if cand in fields:
@@ -224,13 +224,13 @@ def summarize(ops: List[Op]) -> Dict[str, int]:
 
 def format_op(o: Op) -> str:
     tag = {"update": "~", "create": "+", "delete": "-", "nochange": "=", "error": "!"}[o.action]
-    head = f"[{tag}] linia {o.line:>3}  {o.key} {o.label}".rstrip()
+    head = f"[{tag}] line {o.line:>3}  {o.key} {o.label}".rstrip()
     if o.action == "error":
-        return f"{head}  BŁĄD: {o.message}"
+        return f"{head}  ERROR: {o.message}"
     if o.action == "nochange":
-        return f"{head}  (bez zmian)"
+        return f"{head}  (no changes)"
     if o.action == "delete":
-        return f"{head}  USUNIĘCIE rekordu Id={o.rec_id}"
+        return f"{head}  DELETE record Id={o.rec_id}"
     lines = [head]
     for c, (old, new) in o.changes.items():
         lines.append(f"        {c}: {old!r} -> {new!r}")
@@ -247,7 +247,7 @@ def execute(
     delay: float = 0.0,
     progress: Optional[Callable[[str], None]] = print,
 ) -> Dict[str, int]:
-    """Najpierw zapisuje backup, potem wykonuje zmiany jedna po drugiej."""
+    """Writes the backup first, then applies the changes one by one."""
     todo = [o for o in ops if o.action in ("update", "create", "delete")]
     backup = {
         "entity": entity,
@@ -272,7 +272,7 @@ def execute(
     for i, o in enumerate(todo, start=1):
         if stop:
             stats["skipped"] += 1
-            results.append({"line": o.line, "action": o.action, "key": o.key, "status": "skipped", "detail": "przerwano po bledzie"})
+            results.append({"line": o.line, "action": o.action, "key": o.key, "status": "skipped", "detail": "stopped after an error"})
             continue
         try:
             if o.action == "update":
@@ -297,16 +297,16 @@ def execute(
 
 
 def rollback(backup_path: Path, client: XapiClient, execute_it: bool, progress=print) -> Dict[str, int]:
-    """Cofa zmiany typu 'update' z backup.json (przywraca stare wartosci pol)."""
+    """Undo 'update' changes from backup.json (restores the old field values)."""
     data = json.loads(Path(backup_path).read_text(encoding="utf-8"))
     entity = data["entity"]
     stats = {"ok": 0, "failed": 0, "not_restorable": 0}
     for e in data["entries"]:
         if e["action"] != "update":
             stats["not_restorable"] += 1
-            progress(f"  pomijam {e['action']} {e['key']} (usuniete rekordy trzeba odtworzyc recznie, dane sa w backup.json)")
+            progress(f"  skipping {e['action']} {e['key']} (deleted records must be recreated manually; the data is in backup.json)")
             continue
-        progress(f"  {'PRZYWROCE' if execute_it else '[dry-run]'} {e['key']}: {e['before']}")
+        progress(f"  {'RESTORING' if execute_it else '[dry-run]'} {e['key']}: {e['before']}")
         if not execute_it:
             continue
         try:
@@ -314,7 +314,7 @@ def rollback(backup_path: Path, client: XapiClient, execute_it: bool, progress=p
             stats["ok"] += 1
         except ApiError as err:
             stats["failed"] += 1
-            progress(f"    BLAD: {err}")
+            progress(f"    ERROR: {err}")
     return stats
 
 

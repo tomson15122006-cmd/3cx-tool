@@ -1,11 +1,11 @@
-"""Cienki klient HTTP do 3CX Configuration API (XAPI, V20).
+"""Thin HTTP client for the 3CX Configuration API (XAPI, V20).
 
-Co robi:
-  * pobiera token OAuth2 (POST /connect/token, grant_type=client_credentials),
-  * odswieza token gdy wygasnie (HTTP 401),
-  * ponawia zapytania przy chwilowych bledach (429/502/503/504, zerwane polaczenie),
-  * pobiera cale listy stronami ($top/$skip),
-  * PATCH / POST / DELETE na encjach, np. /xapi/v1/Users(123).
+What it does:
+  * gets an OAuth2 token (POST /connect/token, grant_type=client_credentials),
+  * refreshes the token when it expires (HTTP 401),
+  * retries on temporary errors (429/502/503/504, dropped connection),
+  * fetches whole lists page by page ($top/$skip),
+  * PATCH / POST / DELETE on entities, e.g. /xapi/v1/Users(123).
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ IDEMPOTENT = {"GET", "PATCH", "PUT", "DELETE"}
 
 
 class ApiError(Exception):
-    """Blad komunikacji z PBX (z czytelnym opisem po polsku)."""
+    """Communication error with the PBX (with a readable description)."""
 
     def __init__(self, message: str, status: Optional[int] = None):
         super().__init__(message)
@@ -31,15 +31,15 @@ class ApiError(Exception):
 
 def _hint(status: int) -> str:
     if status == 401:
-        return " (zle client_id/client_secret albo token wygasl)"
+        return " (wrong client_id/client_secret, or the token has expired)"
     if status == 403:
         return (
-            " (brak uprawnien: sprawdz role klienta API w 3CX - potrzebna rola np. "
-            "System Owner/Admin. Znany problem: token potrafi dostac role 'user' "
-            "zamiast admina)"
+            " (permission denied: check the role of the API client in 3CX - a role such as "
+            "System Owner/Admin is needed. Known issue: the token can get the 'user' role "
+            "instead of admin)"
         )
     if status == 404:
-        return " (nie ma takiej encji/rekordu - sprawdz nazwe --entity i Id)"
+        return " (no such entity/record - check the --entity name and the Id)"
     return ""
 
 
@@ -97,10 +97,10 @@ class XapiClient:
                 timeout=self.timeout,
             )
         except requests.RequestException as e:
-            raise ApiError(f"Nie moge polaczyc sie z {self.base}: {e}") from e
+            raise ApiError(f"Cannot connect to {self.base}: {e}") from e
         if r.status_code != 200:
             raise ApiError(
-                f"Logowanie nieudane (HTTP {r.status_code}): {_error_text(r)}"
+                f"Login failed (HTTP {r.status_code}): {_error_text(r)}"
                 f"{_hint(r.status_code)}",
                 r.status_code,
             )
@@ -133,7 +133,7 @@ class XapiClient:
                     attempt += 1
                     self._sleep(min(2 ** attempt, 30))
                     continue
-                raise ApiError(f"Blad polaczenia ({method} {path}): {e}") from e
+                raise ApiError(f"Connection error ({method} {path}): {e}") from e
 
             if r.status_code == 401 and not refreshed:
                 refreshed = True
@@ -150,7 +150,7 @@ class XapiClient:
                 continue
             if r.status_code >= 400:
                 raise ApiError(
-                    f"HTTP {r.status_code} przy {method} {path}: {_error_text(r)}"
+                    f"HTTP {r.status_code} on {method} {path}: {_error_text(r)}"
                     f"{_hint(r.status_code)}",
                     r.status_code,
                 )
@@ -160,7 +160,7 @@ class XapiClient:
     @staticmethod
     def _check_entity(entity: str) -> None:
         if not ENTITY_RE.match(entity):
-            raise ApiError(f"Niepoprawna nazwa encji: {entity!r}")
+            raise ApiError(f"Invalid entity name: {entity!r}")
 
     @staticmethod
     def _ref(entity: str, rec_id: Any) -> str:
@@ -168,10 +168,10 @@ class XapiClient:
             return f"{entity}({rec_id})"
         if re.fullmatch(r"[A-Za-z0-9_\-]+", str(rec_id)):
             return f"{entity}('{rec_id}')"
-        raise ApiError(f"Niepoprawne Id: {rec_id!r}")
+        raise ApiError(f"Invalid Id: {rec_id!r}")
 
     def entity_sets(self) -> List[str]:
-        """Lista wszystkich encji (EntitySet) udostepnianych przez ta centrale - z $metadata."""
+        """All entities (EntitySets) exposed by this PBX, read from $metadata."""
         r = self.request("GET", "$metadata", accept="application/xml")
         root = ET.fromstring(r.content)
         names = {el.get("Name") for el in root.iter() if el.tag.endswith("}EntitySet") or el.tag == "EntitySet"}
@@ -186,7 +186,7 @@ class XapiClient:
             r = self.request("GET", entity, params={"$top": page, "$skip": skip})
             chunk = r.json().get("value", [])
             if skip and chunk and chunk == prev:
-                raise ApiError("Serwer ignoruje $skip (strony sie powtarzaja) - przerywam.")
+                raise ApiError("The server ignores $skip (pages repeat) - aborting.")
             out.extend(chunk)
             if len(chunk) < page:
                 return out

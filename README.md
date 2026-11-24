@@ -1,120 +1,120 @@
 # 3CX Bulk Tool
 
-Narzędzie do **masowych zmian w centrali 3CX (V20) przez API**, na podstawie pliku CSV (np. z Excela).
-Jest w dwóch wersjach:
+A tool for **bulk changes in a 3CX (V20) phone system through its API**, driven by a CSV file (e.g. from Excel).
+It comes in two flavours:
 
-| Wersja | Dla kogo | Plik |
+| Version | Who it is for | File |
 |---|---|---|
-| **Okienko (GUI)** | wszyscy w firmie, bez terminala | `tcx-bulk-gui.exe` (Windows) / `tcx-bulk-gui` (Linux) |
-| **Terminal (CLI)** | administratorzy, skrypty, automatyzacja | `tcx-bulk.exe` / `tcx-bulk` |
+| **Desktop window (GUI)** | everyone in the company, no terminal needed | `tcx-bulk-gui.exe` (Windows) / `tcx-bulk-gui` (Linux) |
+| **Terminal (CLI)** | administrators, scripts, automation | `tcx-bulk.exe` / `tcx-bulk` |
 
-Pliki do pobrania budują się automatycznie w GitHubie: zakładka **Actions → ostatni przebieg „Build executables" → Artifacts** (osobno Windows i Linux).
-
----
-
-## Najważniejsze zasady bezpieczeństwa (przeczytaj raz)
-
-1. **Podgląd zawsze przed zmianą.** Wczytanie CSV niczego nie zmienia. Pokazuje tylko listę „było → będzie". Zmiany dzieją się dopiero po kliknięciu **ZASTOSUJ ZMIANY** (w CLI: flaga `--execute`).
-2. **Backup przed każdą zmianą.** Stare wartości zapisują się w `backup.json` (GUI: folder `tcx-bulk-runs` w Twoim katalogu domowym; CLI: folder `tcx-runs`).
-3. **Cofanie.** Zmiany można cofnąć z backupu (przycisk *Cofnij zmiany z backupu* albo `tcx-bulk rollback`). Dotyczy to zmian typu „update". Usuniętych rekordów program nie odtworzy sam. Ich dane zostają w `backup.json`.
-4. **Tworzenie i usuwanie są domyślnie zablokowane.** Trzeba je jawnie odblokować (checkboxy w GUI, flagi `--allow-create` / `--allow-delete`).
-5. **Pierwszy raz zawsze na 1 osobie.** Zrób CSV z jednym wierszem, zastosuj go i sprawdź w panelu 3CX, czy wynik jest taki, jak chcesz. Dopiero potem puść cały plik. W CLI służy do tego `--limit 1`.
-6. **Dane osobowe (RODO / GDPR).** Eksport z centrali zawiera imiona, e-maile i numery telefonów. Nie wysyłaj go mailem, nie wrzucaj do gita ani do ogólnodostępnego folderu. Pliki `export_*` są w `.gitignore`.
+The downloadable files are built automatically on GitHub: **Actions tab → latest "Build executables" run → Artifacts** (separate downloads for Windows and Linux).
 
 ---
 
-## Krok 0: utwórz dostęp API w 3CX (jednorazowo)
+## Safety rules (read once)
 
-Narzędzie loguje się do centrali „kluczem API", a nie Twoim hasłem do panelu.
-
-1. Zaloguj się do panelu administratora 3CX.
-2. Wejdź w **Integrations → API** (w zależności od wersji nazwa menu może się nieco różnić).
-3. Kliknij **Add** i utwórz klienta API. Ustaw:
-   - **Client ID**: dowolna nazwa/numer (to jest login),
-   - **Role / uprawnienia**: tyle, ile potrzeba, najlepiej administracyjne (patrz „Znane problemy" niżej),
-   - zapisz i **skopiuj API Key (Client Secret)**. Pokazuje się zwykle tylko raz.
-4. Adres centrali (FQDN) to to, co wpisujesz w przeglądarce, np. `pbx.firma.ie`.
-
-> Nie wpisuj hasła do panelu ani hasła SSH do tego narzędzia. Nie są potrzebne.
+1. **Always preview before changing anything.** Loading a CSV changes nothing. It only shows a "was → will be" list. Changes happen only after you click **APPLY CHANGES** (CLI: the `--execute` flag).
+2. **A backup is saved before every change.** The old values are written to `backup.json` (GUI: the `tcx-bulk-runs` folder in your home directory; CLI: the `tcx-runs` folder).
+3. **Undo.** Changes can be undone from the backup (the *Undo changes from a backup* button, or `tcx-bulk rollback`). This covers "update" changes. Deleted records are not recreated automatically, but their data stays in `backup.json`.
+4. **Creating and deleting are blocked by default.** You have to unlock them explicitly (checkboxes in the GUI, `--allow-create` / `--allow-delete` flags).
+5. **Test on one person first.** Make a CSV with a single row, apply it, and check in the 3CX admin console that the result is what you wanted. Only then run the full file. In the CLI, `--limit 1` does this for you.
+6. **Personal data (GDPR).** An export from the PBX contains names, email addresses and phone numbers. Do not email it, do not commit it to git, do not leave it in a shared folder. `export_*` files are in `.gitignore`.
 
 ---
 
-## Okienko (GUI): krok po kroku
+## Step 0: create API access in 3CX (one time)
 
-1. Uruchom `tcx-bulk-gui`. Wpisz **Adres PBX**, **Client ID**, **Client Secret** i kliknij **Połącz i sprawdź**.
-   Adres i Client ID zapamiętają się na następny raz, **Secret nigdy nie jest zapisywany na dysku**.
-2. W sekcji 2 wybierz **Encję**. Domyślnie `Users` (numery wewnętrzne / użytkownicy). Po połączeniu na liście są **wszystkie encje, które udostępnia Twoja centrala**.
-3. Kliknij **Eksportuj stan do CSV…**. Dostaniesz plik z aktualnymi danymi. To jest Twój wzór i dodatkowa kopia zapasowa.
-4. Otwórz CSV w Excelu. **Zostaw kolumnę klucza** (dla `Users` to `Number`) i **tylko te kolumny, które chcesz zmienić**. Resztę kolumn usuń. Popraw wartości, zapisz jako CSV.
-5. **Wczytaj CSV (tylko podgląd)…** pokaże, co się zmieni, a co jest błędem. Nic jeszcze nie jest zmieniane.
-6. Jeśli podgląd jest dobry, kliknij **ZASTOSUJ ZMIANY** i potwierdź. Wiersze z błędami zostaną pominięte.
-7. Coś poszło nie tak? **Cofnij zmiany z backupu…** i wskaż `backup.json` z folderu `tcx-bulk-runs`.
+The tool logs in to the PBX with an "API key", not with your admin password.
+
+1. Log in to the 3CX admin console.
+2. Go to **Integrations → API** (the menu name can differ slightly between versions).
+3. Click **Add** and create an API client. Set:
+   - **Client ID**: any name/number (this is the login),
+   - **Role / permissions**: as much as you need, ideally administrative (see "Known issues" below),
+   - save, and **copy the API Key (Client Secret)**. It is usually shown only once.
+4. The PBX address (FQDN) is what you type in the browser, e.g. `pbx.yourcompany.ie`.
+
+> Do not enter your admin console password or SSH password into this tool. They are not needed.
+
+---
+
+## Desktop window (GUI): step by step
+
+1. Start `tcx-bulk-gui`. Enter the **PBX address**, **Client ID** and **Client Secret**, then click **Connect and test**.
+   The address and Client ID are remembered for next time. **The secret is never written to disk.**
+2. In section 2, pick the **Entity**. The default is `Users` (extensions / users). After connecting, the list contains **every entity your PBX exposes**.
+3. Click **Export current state to CSV…**. You get a file with the current data. It is your template and an extra backup.
+4. Open the CSV in Excel. **Keep the key column** (for `Users` it is `Number`) and **only the columns you want to change**. Delete the rest. Edit the values and save as CSV.
+5. **Load CSV (preview only)…** shows what will change and what is an error. Nothing is changed yet.
+6. If the preview looks right, click **APPLY CHANGES** and confirm. Rows with errors are skipped.
+7. Something went wrong? **Undo changes from a backup…** and pick the `backup.json` from the `tcx-bulk-runs` folder.
 
 ## Terminal (CLI)
 
-Skopiuj `.env.example` do `.env` i uzupełnij (albo ustaw zmienne środowiskowe `TCX_FQDN`, `TCX_CLIENT_ID`, `TCX_CLIENT_SECRET`).
+Copy `.env.example` to `.env` and fill it in (or set the environment variables `TCX_FQDN`, `TCX_CLIENT_ID`, `TCX_CLIENT_SECRET`).
 
 ```bash
-tcx-bulk check                              # czy logowanie działa
-tcx-bulk entities                           # lista wszystkich encji w centrali
-tcx-bulk export -o export_users.csv         # aktualny stan -> CSV
-tcx-bulk apply zmiany.csv                   # PODGLĄD (dry-run), nic nie zmienia
-tcx-bulk apply zmiany.csv --execute --limit 1   # test na 1 zmianie
-tcx-bulk apply zmiany.csv --execute         # wszystko (zapyta o potwierdzenie)
+tcx-bulk check                              # does the login work?
+tcx-bulk entities                           # list every entity on the PBX
+tcx-bulk export -o export_users.csv         # current state -> CSV
+tcx-bulk apply changes.csv                  # PREVIEW (dry run), changes nothing
+tcx-bulk apply changes.csv --execute --limit 1   # test with 1 change
+tcx-bulk apply changes.csv --execute        # everything (asks for confirmation)
 tcx-bulk rollback tcx-runs/20261124-103000/backup.json --execute
 ```
 
-Inne encje: `--entity Groups`, `--entity Queues` itd. Kolumnę klucza można wymusić przez `--key Name`. Domyślnie program wybiera po kolei: `Number`, `Name`, `Id`. Przydatne flagi: `--skip-errors` (wykonaj poprawne wiersze mimo błędnych), `--stop-on-error`, `--delay 0.5` (pauza między zmianami, gdy centrala jest obciążona), `-v` (pokaż też wiersze bez zmian).
+Other entities: `--entity Groups`, `--entity Queues`, etc. You can force the key column with `--key Name`. By default the tool tries `Number`, then `Name`, then `Id`. Useful flags: `--skip-errors` (apply the valid rows even if some rows are bad), `--stop-on-error`, `--delay 0.5` (pause between changes if the PBX is busy), `-v` (also show rows with no changes).
 
 ---
 
-## Jak przygotować plik CSV
+## How to prepare the CSV file
 
-Przykład (`examples/users_update.csv`):
+Example (`examples/users_update.csv`):
 
 ```csv
 Number,FirstName,LastName,EmailAddress,MobileNumber
-100,Jan,Kowalski,jan.kowalski@firma.ie,0851234567
-101,Anna,Nowak,anna.nowak@firma.ie,
-102,,,nowy.adres@firma.ie,
+100,John,Murphy,john.murphy@company.ie,0851234567
+101,Aoife,Byrne,aoife.byrne@company.ie,
+102,,,new.address@company.ie,
 ```
 
-| Zasada | Co to znaczy |
+| Rule | What it means |
 |---|---|
-| Kolumna klucza | Po niej program znajduje rekord w centrali (dla `Users`: `Number`). Musi być w pliku. |
-| **Pusta komórka** | **Nie zmieniaj tego pola.** (Wiersz 102 zmienia tylko e-mail.) |
-| `__EMPTY__` | Ustaw pole na pustą wartość (kasowanie). |
-| Nazwy kolumn | Muszą dokładnie pasować do nazw pól w centrali (zob. nagłówki z eksportu). **Literówka w nagłówku przerywa całość przed jakąkolwiek zmianą**, żeby nic się nie zepsuło po cichu. |
-| Separator | Przecinek, średnik lub tabulator. Wykrywany automatycznie (polski Excel często zapisuje średnik). |
-| Prawda/fałsz | `true/false`, `tak/nie`, `1/0`. |
-| Numery telefonów | Zostają tekstem, więc zero na początku nie ginie. |
-| Pola zagnieżdżone | Wpisz JSON w komórce, np. `[{"GroupId":1}]`. Dla zaawansowanych. |
-| Kolumna `action` | Opcjonalna: `update` (domyślnie), `create`, `delete`. Wymaga flag zezwalających (zob. wyżej). Wzór: `examples/users_create_delete.csv`. |
+| Key column | Used to find the record on the PBX (for `Users`: `Number`). It must be in the file. |
+| **Empty cell** | **Leave this field unchanged.** (Row 102 changes only the email.) |
+| `__EMPTY__` | Set the field to an empty value (clearing it). |
+| Column names | Must match the PBX field names exactly (see the headers of an export). **A typo in a header aborts everything before any change is made**, so nothing breaks silently. |
+| Separator | Comma, semicolon or tab, detected automatically (Excel in many European locales saves semicolons). |
+| True/false | `true/false`, `yes/no`, `1/0`. |
+| Phone numbers | Kept as text, so a leading zero is not lost. |
+| Nested fields | Put JSON in the cell, e.g. `[{"GroupId":1}]`. For advanced users. |
+| `action` column | Optional: `update` (default), `create`, `delete`. Needs the unlock flags (see above). Template: `examples/users_create_delete.csv`. |
 
-Program jest **idempotentny**. Jeśli wartość w centrali już jest taka, jak w pliku, wiersz jest oznaczony „bez zmian". Tego samego pliku można więc użyć dwa razy.
-
----
-
-## Znane ograniczenia i problemy (szczerze)
-
-- **To narzędzie nie było jeszcze testowane na prawdziwej centrali 3CX.** Zostało napisane na podstawie [oficjalnej specyfikacji Configuration API](https://www.3cx.com/docs/configuration-rest-api-endpoints/) i przetestowane na symulatorze centrali (22 testy automatyczne). Dlatego **pierwszy test zrób na jednym testowym użytkowniku**, np. zmieniając tylko `FirstName`.
-- **Błąd 403 na `/Users`.** Część osób na forum 3CX zgłasza, że klient API dostaje token z rolą `user` zamiast administratora i wtedy `/Users` zwraca 403. Sprawdź rolę klienta API w panelu. Jeśli problem zostaje, napisz do mnie, co zwraca `tcx-bulk check`.
-- **Nie wszystko da się zmienić przez API.** Niektóre pola są tylko referencjami lub są zablokowane po stronie 3CX (np. bieżący status użytkownika `CurrentProfileName` nie zmienia się przez PATCH). Taki błąd zobaczysz w wynikach (`result.csv`) przy konkretnym wierszu.
-- **Lista `Users` może nie zawierać wszystkich kont** (np. kont z rolą System Owner).
-- **Wszystkie encje = operacje CRUD.** Narzędzie czyta, zmienia, tworzy i usuwa rekordy każdej encji z `$metadata` centrali. Specjalnych akcji API (np. restart usługi, wywołania funkcji OData) nie obsługuje.
-- Certyfikat TLS jest domyślnie **weryfikowany**. Gdy masz własne CA, wskaż plik w polu *Plik CA* (albo `TCX_CA_BUNDLE`). Opcja „nie sprawdzaj certyfikatu" jest ostatecznością.
+The tool is **idempotent**: if the value on the PBX already equals the one in the file, the row is marked "no changes". Running the same file twice is safe.
 
 ---
 
-## Dla programisty
+## Known limitations and issues (honest list)
+
+- **This tool has not yet been tested against a real 3CX PBX.** It was written from the [official Configuration API specification](https://www.3cx.com/docs/configuration-rest-api-endpoints/) and tested against a simulated PBX (22 automated tests). So **do your first test on a single test user**, e.g. changing only `FirstName`.
+- **403 on `/Users`.** Some people on the 3CX forum report that an API client gets a token with the `user` role instead of admin, and then `/Users` returns 403. Check the API client's role in the admin console. If the problem stays, run `tcx-bulk check` and look at the message.
+- **Not everything can be changed through the API.** Some fields are only references or are locked by 3CX (for example, the current user status `CurrentProfileName` cannot be changed with PATCH). You will see such an error against the specific row in the results (`result.csv`).
+- **The `Users` list may not include every account** (for example accounts with the System Owner role).
+- **All entities = CRUD operations.** The tool reads, updates, creates and deletes records of any entity listed in the PBX `$metadata`. It does not support special API actions (e.g. restarting a service, OData function calls).
+- The TLS certificate is **verified** by default. If you use your own CA, point to the file in the *CA file* field (or `TCX_CA_BUNDLE`). "Do not verify certificate" is a last resort.
+
+---
+
+## For developers
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                     # testy (GUI-owe wymagają tkinter + DISPLAY, w CI: xvfb-run)
-python -m tcx_bulk.gui        # uruchom okienko ze źródeł
+pytest -q                     # tests (GUI tests need tkinter + DISPLAY; in CI: xvfb-run)
+python -m tcx_bulk.gui        # run the window from source
 ```
 
-Budowa plików wykonywalnych lokalnie (na danym systemie dla niego samego):
+Building the executables locally (on a given OS, for that OS only):
 
 ```bash
 pip install pyinstaller
@@ -122,4 +122,4 @@ pyinstaller --onefile --windowed --name tcx-bulk-gui --paths src packaging/gui_e
 pyinstaller --onefile --name tcx-bulk --paths src packaging/cli_entry.py
 ```
 
-Struktura: `src/tcx_bulk/client.py` (HTTP, token, ponawianie), `bulk.py` (CSV, plan zmian, backup, rollback), `cli.py`, `gui.py`; `tests/fakepbx.py` to symulator centrali.
+Layout: `src/tcx_bulk/client.py` (HTTP, token, retries), `bulk.py` (CSV, change plan, backup, rollback), `cli.py`, `gui.py`; `tests/fakepbx.py` is the PBX simulator.

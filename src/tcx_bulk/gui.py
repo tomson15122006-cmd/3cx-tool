@@ -1,11 +1,11 @@
-"""Okienko (GUI) do masowych zmian w 3CX - dla osob, ktore nie chca uzywac terminala.
+"""Desktop window (GUI) for bulk changes in 3CX - for people who prefer not to use a terminal.
 
-Przeplyw pracy:
-  1. Polacz  -> logowanie do PBX, pobranie listy encji
-  2. Eksportuj (opcjonalnie) -> aktualny stan do CSV; to jest tez wzor do edycji
-  3. Wczytaj CSV -> PODGLAD zmian (nic jeszcze nie jest zmieniane!)
-  4. Zastosuj -> potwierdzenie, backup, wykonanie
-  5. Cofnij -> przywrocenie starych wartosci z backupu
+Workflow:
+  1. Connect  -> log in to the PBX and fetch the list of entities
+  2. Export (optional) -> current state to CSV; this is also a template to edit
+  3. Load CSV -> PREVIEW of changes (nothing is changed yet!)
+  4. Apply -> confirmation, backup, execution
+  5. Undo -> restore the old values from the backup
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class App(ttk.Frame):
     def __init__(self, master: tk.Tk, client_factory: Optional[Callable[..., XapiClient]] = None,
                  sync: bool = False, confirm: Optional[Callable[[str, str], bool]] = None):
         super().__init__(master, padding=10)
-        self.master, self.sync = master, sync  # sync=True: bez watkow (do testow)
+        self.master, self.sync = master, sync  # sync=True: no threads (for tests)
         self.client_factory = client_factory or XapiClient
         self.confirm = confirm or (lambda title, msg: messagebox.askyesno(title, msg, icon="warning"))
         self.client: Optional[XapiClient] = None
@@ -54,40 +54,40 @@ class App(ttk.Frame):
         self.allow_create = tk.BooleanVar(value=False)
         self.allow_delete = tk.BooleanVar(value=False)
 
-        box = ttk.LabelFrame(self, text="1. Połączenie z centralą 3CX", padding=8)
+        box = ttk.LabelFrame(self, text="1. Connection to the 3CX PBX", padding=8)
         box.pack(fill="x")
         for i, (label, key, show) in enumerate([
-            ("Adres PBX (np. pbx.firma.ie)", "fqdn", ""), ("Client ID", "cid", ""),
-            ("Client Secret (API Key)", "secret", "*"), ("Plik CA (opcjonalnie)", "ca", "")]):
+            ("PBX address (e.g. pbx.company.ie)", "fqdn", ""), ("Client ID", "cid", ""),
+            ("Client Secret (API Key)", "secret", "*"), ("CA file (optional)", "ca", "")]):
             ttk.Label(box, text=label).grid(row=i // 2, column=(i % 2) * 2, sticky="w", padx=4, pady=2)
             ttk.Entry(box, textvariable=self.v[key], show=show, width=26).grid(row=i // 2, column=(i % 2) * 2 + 1, padx=4, pady=2)
-        ttk.Checkbutton(box, text="Nie sprawdzaj certyfikatu TLS (niezalecane)", variable=self.insecure).grid(row=2, column=0, columnspan=2, sticky="w")
-        self.btn_connect = ttk.Button(box, text="Połącz i sprawdź", command=self.connect)
+        ttk.Checkbutton(box, text="Do not verify TLS certificate (not recommended)", variable=self.insecure).grid(row=2, column=0, columnspan=2, sticky="w")
+        self.btn_connect = ttk.Button(box, text="Connect and test", command=self.connect)
         self.btn_connect.grid(row=2, column=3, sticky="e", pady=4)
-        self.status = ttk.Label(box, text="Niepołączone", foreground="#a00")
+        self.status = ttk.Label(box, text="Not connected", foreground="#a00")
         self.status.grid(row=2, column=2, sticky="w")
 
-        box = ttk.LabelFrame(self, text="2. Co zmieniamy", padding=8)
+        box = ttk.LabelFrame(self, text="2. What to change", padding=8)
         box.pack(fill="x", pady=6)
-        ttk.Label(box, text="Encja (typ danych)").grid(row=0, column=0, sticky="w", padx=4)
+        ttk.Label(box, text="Entity (data type)").grid(row=0, column=0, sticky="w", padx=4)
         self.cb_entity = ttk.Combobox(box, textvariable=self.v["entity"], values=COMMON_ENTITIES, width=30)
         self.cb_entity.grid(row=0, column=1, padx=4)
         self.v["entity"].set("Users")
-        ttk.Label(box, text="Kolumna klucza (puste = auto)").grid(row=0, column=2, sticky="w", padx=4)
+        ttk.Label(box, text="Key column (empty = auto)").grid(row=0, column=2, sticky="w", padx=4)
         ttk.Entry(box, textvariable=self.v["key"], width=16).grid(row=0, column=3, padx=4)
-        ttk.Button(box, text="Eksportuj stan do CSV…", command=self.export).grid(row=0, column=4, padx=8)
+        ttk.Button(box, text="Export current state to CSV…", command=self.export).grid(row=0, column=4, padx=8)
 
-        box = ttk.LabelFrame(self, text="3. Import CSV i podgląd", padding=8)
+        box = ttk.LabelFrame(self, text="3. Import CSV and preview", padding=8)
         box.pack(fill="x")
-        ttk.Button(box, text="Wczytaj CSV (tylko podgląd)…", command=self.load_csv).pack(side="left")
-        ttk.Checkbutton(box, text="Zezwól na tworzenie (action=create)", variable=self.allow_create).pack(side="left", padx=10)
-        ttk.Checkbutton(box, text="Zezwól na usuwanie (action=delete)", variable=self.allow_delete).pack(side="left")
+        ttk.Button(box, text="Load CSV (preview only)…", command=self.load_csv).pack(side="left")
+        ttk.Checkbutton(box, text="Allow creating (action=create)", variable=self.allow_create).pack(side="left", padx=10)
+        ttk.Checkbutton(box, text="Allow deleting (action=delete)", variable=self.allow_delete).pack(side="left")
 
-        box = ttk.LabelFrame(self, text="4. Wykonanie", padding=8)
+        box = ttk.LabelFrame(self, text="4. Execute", padding=8)
         box.pack(fill="x", pady=6)
-        self.btn_apply = ttk.Button(box, text="ZASTOSUJ ZMIANY", command=self.apply, state="disabled")
+        self.btn_apply = ttk.Button(box, text="APPLY CHANGES", command=self.apply, state="disabled")
         self.btn_apply.pack(side="left")
-        ttk.Button(box, text="Cofnij zmiany z backupu…", command=self.rollback).pack(side="left", padx=10)
+        ttk.Button(box, text="Undo changes from a backup…", command=self.rollback).pack(side="left", padx=10)
         self.progress = ttk.Progressbar(box, mode="determinate", length=220)
         self.progress.pack(side="right")
 
@@ -99,16 +99,16 @@ class App(ttk.Frame):
             d = json.loads(CONFIG.read_text(encoding="utf-8"))
             self.v["fqdn"].set(d.get("fqdn", "")); self.v["cid"].set(d.get("cid", "")); self.v["ca"].set(d.get("ca", ""))
         except (OSError, ValueError):
-            pass  # brak profilu to nie blad
+            pass  # no saved profile is fine
 
     def _save_profile(self) -> None:
-        try:  # sekretu NIE zapisujemy na dysku
+        try:  # the secret is NEVER written to disk
             CONFIG.parent.mkdir(parents=True, exist_ok=True)
             CONFIG.write_text(json.dumps({k: self.v[k].get() for k in ("fqdn", "cid", "ca")}), encoding="utf-8")
         except OSError:
             pass
 
-    # ------------------------------------------------------------ pomocnicze
+    # ------------------------------------------------------------ helpers
     def say(self, text: str = "") -> None:
         self.q.put(lambda: self._say(text))
 
@@ -124,19 +124,19 @@ class App(ttk.Frame):
                 break
         self.after(100, self._pump)
 
-    def flush(self) -> None:  # do testow
+    def flush(self) -> None:  # for tests
         while not self.q.empty():
             self.q.get_nowait()()
 
     def work(self, fn: Callable[[], None]) -> None:
-        """Wykonuje fn w tle (zeby okno nie 'zamarzalo'); bledy pokazuje w logu."""
+        """Run fn in the background (so the window does not freeze); errors go to the log."""
         def run() -> None:
             try:
                 fn()
             except (ApiError, PlanError) as e:
-                self.say(f"\nBŁĄD: {e}")
-            except Exception as e:  # noqa: BLE001 - nie chcemy, zeby okno po cichu padlo
-                self.say(f"\nNIESPODZIEWANY BŁĄD: {type(e).__name__}: {e}")
+                self.say(f"\nERROR: {e}")
+            except Exception as e:  # noqa: BLE001 - never let the window die silently
+                self.say(f"\nUNEXPECTED ERROR: {type(e).__name__}: {e}")
         if self.sync:
             run()
             self.flush()
@@ -145,35 +145,36 @@ class App(ttk.Frame):
 
     def need_client(self) -> bool:
         if self.client is None:
-            messagebox.showinfo("Najpierw połącz", "Kliknij 'Połącz i sprawdź'.") if not self.sync else None
-            self.say("Najpierw połącz się z centralą.")
+            if not self.sync:
+                messagebox.showinfo("Connect first", "Click “Connect and test” first.")
+            self.say("Connect to the PBX first.")
             return False
         return True
 
-    # ------------------------------------------------------------ akcje
+    # ------------------------------------------------------------ actions
     def connect(self) -> None:
         fqdn, cid, secret = (self.v[k].get().strip() for k in ("fqdn", "cid", "secret"))
         if not (fqdn and cid and secret):
-            self.say("Uzupełnij adres PBX, Client ID i Client Secret."); return
+            self.say("Fill in the PBX address, Client ID and Client Secret."); return
         verify = False if self.insecure.get() else (self.v["ca"].get().strip() or True)
         self._save_profile()
 
         def job() -> None:
-            self.say(f"Łączę z {fqdn} ...")
+            self.say(f"Connecting to {fqdn} ...")
             c = self.client_factory(fqdn, cid, secret, verify=verify)
             try:
                 names = c.entity_sets()
             except ApiError as e:
-                if e.status in (401, 403) or "Logowanie" in str(e):
+                if e.status in (401, 403) or "Login failed" in str(e):
                     raise
-                names = []  # $metadata niedostepne - zostaje lista podstawowa
-            c.list_all("Users", page=1)  # test logowania + uprawnien
+                names = []  # $metadata not available - keep the basic list
+            c.list_all("Users", page=1)  # tests login + permissions
             self.client = c
             def ui() -> None:
-                self.status.configure(text="Połączono", foreground="#070")
+                self.status.configure(text="Connected", foreground="#070")
                 self.cb_entity.configure(values=names or COMMON_ENTITIES)
             self.q.put(ui)
-            self.say(f"Połączono. Dostępnych encji: {len(names) or 'brak listy (użyję podstawowej)'}.")
+            self.say(f"Connected. Entities available: {len(names) or 'no list (using the basic one)'}.")
         self.work(job)
 
     def _key_for(self, records) -> str:
@@ -186,17 +187,17 @@ class App(ttk.Frame):
             defaultextension=".csv", initialfile=f"export_{entity}.csv", filetypes=[("CSV", "*.csv")])
         if not path: return
         def job() -> None:
-            self.say(f"Pobieram {entity} …")
+            self.say(f"Fetching {entity} ...")
             recs = self.client.list_all(entity)
             headers, rows = export_records(recs)
             write_csv(Path(path), headers, rows)
-            self.say(f"Zapisano {len(recs)} rekordów do {path}\n"
-                     "UWAGA: plik zawiera dane osobowe (RODO) – nie wysyłaj go mailem.")
+            self.say(f"Saved {len(recs)} records to {path}\n"
+                     "WARNING: the file contains personal data (GDPR) - do not email it.")
         self.work(job)
 
     def load_csv(self) -> None:
         if not self.need_client(): return
-        path = getattr(self, "_test_path", None) or filedialog.askopenfilename(filetypes=[("CSV", "*.csv *.txt"), ("Wszystko", "*.*")])
+        path = getattr(self, "_test_path", None) or filedialog.askopenfilename(filetypes=[("CSV", "*.csv *.txt"), ("All files", "*.*")])
         if not path: return
         entity = self.v["entity"].get().strip()
         def job() -> None:
@@ -204,47 +205,47 @@ class App(ttk.Frame):
             self.q.put(lambda: self.btn_apply.configure(state="disabled"))
             headers, rows = read_csv(Path(path))
             if not rows:
-                self.say("Plik CSV nie ma wierszy z danymi."); return
-            self.say(f"\n=== PODGLĄD ({Path(path).name}) – nic jeszcze nie zmieniono ===")
+                self.say("The CSV file has no data rows."); return
+            self.say(f"\n=== PREVIEW ({Path(path).name}) - nothing has been changed yet ===")
             recs = self.client.list_all(entity)
             self.key = self._key_for(recs)
-            self.say(f"Encja: {entity}, kolumna klucza: {self.key}")
+            self.say(f"Entity: {entity}, key column: {self.key}")
             ops = build_plan(rows, headers, recs, self.key, self.allow_create.get(), self.allow_delete.get())
             for o in ops:
                 if o.action != "nochange":
                     self.say(format_op(o))
             s = summarize(ops)
-            self.say(f"\nPODSUMOWANIE: zmian={s['update']}, nowych={s['create']}, usunięć={s['delete']}, "
-                     f"bez zmian={s['nochange']}, błędów={s['error']}")
+            self.say(f"\nSUMMARY: updates={s['update']}, creates={s['create']}, deletes={s['delete']}, "
+                     f"no changes={s['nochange']}, errors={s['error']}")
             self.ops = ops
             if s["update"] + s["create"] + s["delete"]:
-                self.say("Jeśli podgląd jest OK, kliknij ZASTOSUJ ZMIANY." + (
-                    "\nWiersze z błędami zostaną POMINIĘTE." if s["error"] else ""))
+                self.say("If the preview looks right, click APPLY CHANGES." + (
+                    "\nRows with errors will be SKIPPED." if s["error"] else ""))
                 self.q.put(lambda: self.btn_apply.configure(state="normal"))
             else:
-                self.say("Nic do zrobienia.")
+                self.say("Nothing to do.")
         self.work(job)
 
     def apply(self) -> None:
         if not self.need_client() or not self.ops: return
         s = summarize(self.ops)
         n = s["update"] + s["create"] + s["delete"]
-        msg = (f"Za chwilę zmienię dane w centrali {self.client.base}:\n\n  zmian: {s['update']}\n  nowych: {s['create']}\n"
-               f"  USUNIĘĆ: {s['delete']}\n  pominiętych błędów: {s['error']}\n\nPrzed zmianami zapiszę backup. Kontynuować?")
-        if not self.confirm("Potwierdź zmiany", msg):
-            self.say("Anulowano."); return
+        msg = (f"I am about to change data on the PBX {self.client.base}:\n\n  updates: {s['update']}\n  creates: {s['create']}\n"
+               f"  DELETES: {s['delete']}\n  rows with errors (skipped): {s['error']}\n\nA backup is saved first. Continue?")
+        if not self.confirm("Confirm changes", msg):
+            self.say("Cancelled."); return
         entity = self.v["entity"].get().strip()
         ops = self.ops
         run_dir = RUNS / time.strftime("%Y%m%d-%H%M%S")
         run_dir.mkdir(parents=True, exist_ok=True)
         self.q.put(lambda: (self.btn_apply.configure(state="disabled"), self.progress.configure(maximum=n, value=0)))
         def job() -> None:
-            self.say(f"\n=== WYKONUJĘ {n} zmian ===")
+            self.say(f"\n=== APPLYING {n} changes ===")
             def prog(line: str) -> None:
                 self.say(line); self.q.put(lambda: self.progress.step(1))
             st = execute(ops, self.client, entity, run_dir, progress=prog)
-            self.say(f"\nGOTOWE: ok={st['ok']}, błędy={st['failed']}\nBackup i wyniki: {run_dir}")
-            self.say("Cofnięcie: przycisk „Cofnij zmiany z backupu” i wybierz backup.json z tego folderu.")
+            self.say(f"\nDONE: ok={st['ok']}, failed={st['failed']}\nBackup and results: {run_dir}")
+            self.say("To undo: click “Undo changes from a backup…” and pick backup.json from that folder.")
             self.ops = []
         self.work(job)
 
@@ -253,12 +254,12 @@ class App(ttk.Frame):
         path = getattr(self, "_test_path", None) or filedialog.askopenfilename(
             initialdir=str(RUNS), filetypes=[("backup.json", "*.json")])
         if not path: return
-        if not self.confirm("Cofnąć zmiany?", f"Przywrócę stare wartości z:\n{path}\n\nKontynuować?"):
-            self.say("Anulowano."); return
+        if not self.confirm("Undo changes?", f"This restores the old values from:\n{path}\n\nContinue?"):
+            self.say("Cancelled."); return
         def job() -> None:
-            self.say("\n=== COFANIE ZMIAN ===")
+            self.say("\n=== UNDOING CHANGES ===")
             st = rollback(Path(path), self.client, True, progress=self.say)
-            self.say(f"GOTOWE: przywrócono={st['ok']}, błędy={st['failed']}, nieprzywracalne={st['not_restorable']}")
+            self.say(f"DONE: restored={st['ok']}, failed={st['failed']}, not restorable={st['not_restorable']}")
         self.work(job)
 
 

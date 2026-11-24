@@ -1,4 +1,4 @@
-"""Interfejs wiersza polecen: check | export | apply | rollback."""
+"""Command line interface: check | entities | export | apply | rollback."""
 from __future__ import annotations
 
 import argparse
@@ -18,7 +18,7 @@ from .client import ApiError, XapiClient
 
 
 def load_dotenv(path: str = ".env") -> None:
-    """Minimalny loader .env (nie nadpisuje zmiennych juz ustawionych w srodowisku)."""
+    """Minimal .env loader (does not override variables already set in the environment)."""
     p = Path(path)
     if not p.is_file():
         return
@@ -34,14 +34,14 @@ def make_client(args) -> XapiClient:
     fqdn = args.fqdn or os.environ.get("TCX_FQDN")
     cid = os.environ.get("TCX_CLIENT_ID")
     secret = os.environ.get("TCX_CLIENT_SECRET")
-    missing = [n for n, v in (("TCX_FQDN (lub --fqdn)", fqdn), ("TCX_CLIENT_ID", cid), ("TCX_CLIENT_SECRET", secret)) if not v]
+    missing = [n for n, v in (("TCX_FQDN (or --fqdn)", fqdn), ("TCX_CLIENT_ID", cid), ("TCX_CLIENT_SECRET", secret)) if not v]
     if missing:
-        sys.exit("Brakuje ustawien: " + ", ".join(missing) + "\nUstaw je w pliku .env (wzor: .env.example).")
+        sys.exit("Missing settings: " + ", ".join(missing) + "\nSet them in a .env file (template: .env.example).")
     verify = os.environ.get("TCX_CA_BUNDLE") or True
     if args.insecure or os.environ.get("TCX_VERIFY_TLS", "1") == "0":
         verify = False
         requests.packages.urllib3.disable_warnings()  # type: ignore[attr-defined]
-        print("UWAGA: weryfikacja certyfikatu TLS WYLACZONA.", file=sys.stderr)
+        print("WARNING: TLS certificate verification is DISABLED.", file=sys.stderr)
     return XapiClient(fqdn, cid, secret, verify=verify)
 
 
@@ -51,11 +51,11 @@ def new_run_dir(base: str) -> Path:
     return d
 
 
-# ------------------------------------------------------------ komendy
+# ------------------------------------------------------------ commands
 def cmd_check(args) -> int:
     c = make_client(args)
     recs = c.list_all(args.entity, page=5)
-    print(f"OK: polaczono z {c.base}, zalogowano, encja {args.entity} zwrocila {len(recs)}+ rekordow.")
+    print(f"OK: connected to {c.base}, logged in, entity {args.entity} returned {len(recs)}+ records.")
     return 0
 
 
@@ -75,24 +75,24 @@ def cmd_export(args) -> int:
         fields = args.fields.split(",") if args.fields else None
         headers, rows = export_records(records, fields)
         write_csv(out, headers, rows)
-    print(f"Zapisano {len(records)} rekordow ({args.entity}) do {out}")
-    print("UWAGA: plik zawiera dane osobowe (RODO/GDPR) - nie wysylaj go mailem i nie wrzucaj do gita.")
+    print(f"Saved {len(records)} records ({args.entity}) to {out}")
+    print("WARNING: the file contains personal data (GDPR) - do not email it or commit it to git.")
     return 0
 
 
 def cmd_apply(args) -> int:
     headers, rows = read_csv(Path(args.file))
     if not rows:
-        sys.exit("Plik CSV nie ma zadnych wierszy z danymi.")
+        sys.exit("The CSV file has no data rows.")
     c = make_client(args)
-    print(f"Pobieram aktualny stan {args.entity} z PBX...")
+    print(f"Fetching the current state of {args.entity} from the PBX...")
     records = c.list_all(args.entity)
     try:
         key = args.key or guess_key(records)
-        print(f"Kolumna klucza: {key}")
+        print(f"Key column: {key}")
         ops = build_plan(rows, headers, records, key, args.allow_create, args.allow_delete)
     except PlanError as e:
-        sys.exit(f"BLAD PLIKU: {e}")
+        sys.exit(f"FILE ERROR: {e}")
 
     run_dir = new_run_dir(args.out_dir)
     for o in ops:
@@ -100,8 +100,8 @@ def cmd_apply(args) -> int:
             print(format_op(o))
     s = summarize(ops)
     print(
-        f"\nPODSUMOWANIE: zmian={s['update']}, nowych={s['create']}, usuniec={s['delete']}, "
-        f"bez zmian={s['nochange']}, bledow={s['error']}"
+        f"\nSUMMARY: updates={s['update']}, creates={s['create']}, deletes={s['delete']}, "
+        f"no changes={s['nochange']}, errors={s['error']}"
     )
     write_csv(
         run_dir / "plan.csv",
@@ -112,29 +112,29 @@ def cmd_apply(args) -> int:
     todo = [o for o in ops if o.action in ("update", "create", "delete")]
     if args.limit:
         for o in todo[args.limit:]:
-            o.action, o.message = "error", "poza limitem --limit"
+            o.action, o.message = "error", "beyond --limit"
         todo = todo[: args.limit]
-        print(f"(--limit {args.limit}: wykonam tylko pierwsze {len(todo)} zmian)")
+        print(f"(--limit {args.limit}: only the first {len(todo)} changes will be applied)")
 
     if not args.execute:
-        print("\nTo byl DRY-RUN - nic nie zostalo zmienione w PBX. Dodaj --execute zeby wykonac.")
+        print("\nThis was a DRY RUN - nothing was changed in the PBX. Add --execute to apply.")
         return 1 if s["error"] else 0
     if not todo:
-        print("Nic do zrobienia.")
+        print("Nothing to do.")
         return 1 if s["error"] else 0
     if s["error"] and not args.skip_errors:
-        sys.exit(f"Plan ma {s['error']} bledow. Popraw plik albo uzyj --skip-errors, zeby pominac bledne wiersze.")
+        sys.exit(f"The plan has {s['error']} error(s). Fix the file, or use --skip-errors to skip the bad rows.")
 
     if not args.yes:
-        ans = input(f"\nWykonac {len(todo)} zmian na {c.base}? Wpisz TAK zeby potwierdzic: ")
-        if ans.strip().upper() not in ("TAK", "YES"):
-            print("Anulowano.")
+        ans = input(f"\nApply {len(todo)} changes on {c.base}? Type YES to confirm: ")
+        if ans.strip().upper() != "YES":
+            print("Cancelled.")
             return 1
 
     stats = execute(ops, c, args.entity, run_dir, stop_on_error=args.stop_on_error, delay=args.delay)
-    print(f"\nGOTOWE: ok={stats['ok']}, bledy={stats['failed']}, pominiete={stats['skipped']}")
-    print(f"Backup: {run_dir / 'backup.json'}\nWyniki: {run_dir / 'result.csv'}")
-    print(f"Cofniecie zmian: tcx-bulk rollback {run_dir / 'backup.json'} --execute")
+    print(f"\nDONE: ok={stats['ok']}, failed={stats['failed']}, skipped={stats['skipped']}")
+    print(f"Backup: {run_dir / 'backup.json'}\nResults: {run_dir / 'result.csv'}")
+    print(f"To undo: tcx-bulk rollback {run_dir / 'backup.json'} --execute")
     return 1 if stats["failed"] else 0
 
 
@@ -142,51 +142,51 @@ def cmd_rollback(args) -> int:
     c = make_client(args)
     stats = rollback(Path(args.backup), c, args.execute)
     if not args.execute:
-        print("\nDRY-RUN. Dodaj --execute zeby naprawde cofnac zmiany.")
+        print("\nDRY RUN. Add --execute to really undo the changes.")
     else:
-        print(f"\nGOTOWE: przywrocono={stats['ok']}, bledy={stats['failed']}, nieprzywracalne={stats['not_restorable']}")
+        print(f"\nDONE: restored={stats['ok']}, failed={stats['failed']}, not restorable={stats['not_restorable']}")
     return 1 if stats["failed"] else 0
 
 
 # ------------------------------------------------------------ parser
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--fqdn", help="adres PBX, np. pbx.firma.ie (albo TCX_FQDN w .env)")
-    common.add_argument("--insecure", action="store_true", help="wylacz weryfikacje TLS (niezalecane)")
+    common.add_argument("--fqdn", help="PBX address, e.g. pbx.company.ie (or TCX_FQDN in .env)")
+    common.add_argument("--insecure", action="store_true", help="disable TLS verification (not recommended)")
     ent = argparse.ArgumentParser(add_help=False)
-    ent.add_argument("--entity", default="Users", help="encja XAPI (domyslnie Users = rozszerzenia)")
+    ent.add_argument("--entity", default="Users", help="XAPI entity (default: Users = extensions)")
 
-    p = argparse.ArgumentParser(prog="tcx-bulk", description="Masowe zmiany w 3CX przez API (z CSV).")
+    p = argparse.ArgumentParser(prog="tcx-bulk", description="Bulk changes in 3CX through the API (from CSV).")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sp = sub.add_parser("check", parents=[common, ent], help="sprawdz polaczenie i logowanie")
+    sp = sub.add_parser("check", parents=[common, ent], help="check connection and login")
     sp.set_defaults(fn=cmd_check)
 
-    sp = sub.add_parser("entities", parents=[common], help="pokaz wszystkie encje dostepne w tej centrali")
+    sp = sub.add_parser("entities", parents=[common], help="list all entities available on this PBX")
     sp.set_defaults(fn=cmd_entities)
 
-    sp = sub.add_parser("export", parents=[common, ent], help="wyeksportuj aktualny stan do CSV/JSON (backup + wzor)")
+    sp = sub.add_parser("export", parents=[common, ent], help="export the current state to CSV/JSON (backup + template)")
     sp.add_argument("-o", "--output", required=True)
-    sp.add_argument("--fields", help="lista pol po przecinku (domyslnie wszystkie proste pola)")
-    sp.add_argument("--json", action="store_true", help="pelny eksport JSON (z zagniezdzonymi danymi)")
+    sp.add_argument("--fields", help="comma-separated list of fields (default: all simple fields)")
+    sp.add_argument("--json", action="store_true", help="full JSON export (including nested data)")
     sp.set_defaults(fn=cmd_export)
 
-    sp = sub.add_parser("apply", parents=[common, ent], help="zastosuj zmiany z CSV (domyslnie DRY-RUN)")
-    sp.add_argument("file", help="plik CSV")
-    sp.add_argument("--key", help="kolumna identyfikujaca rekord (domyslnie: Number, potem Name, potem Id)")
-    sp.add_argument("--execute", action="store_true", help="NAPRAWDE wykonaj zmiany (bez tego tylko podglad)")
-    sp.add_argument("--yes", action="store_true", help="nie pytaj o potwierdzenie")
-    sp.add_argument("--allow-create", action="store_true", help="zezwol na action=create")
-    sp.add_argument("--allow-delete", action="store_true", help="zezwol na action=delete")
-    sp.add_argument("--limit", type=int, help="wykonaj tylko pierwsze N zmian (test na malej probce)")
-    sp.add_argument("--skip-errors", action="store_true", help="wykonaj poprawne wiersze mimo blednych")
-    sp.add_argument("--stop-on-error", action="store_true", help="przerwij po pierwszym bledzie API")
-    sp.add_argument("--delay", type=float, default=0.0, help="pauza (s) miedzy zmianami")
-    sp.add_argument("--out-dir", default="tcx-runs", help="gdzie zapisac backup i logi")
-    sp.add_argument("-v", "--verbose", action="store_true", help="pokaz tez wiersze bez zmian")
+    sp = sub.add_parser("apply", parents=[common, ent], help="apply changes from a CSV (DRY RUN by default)")
+    sp.add_argument("file", help="CSV file")
+    sp.add_argument("--key", help="column that identifies the record (default: Number, then Name, then Id)")
+    sp.add_argument("--execute", action="store_true", help="REALLY apply the changes (without it: preview only)")
+    sp.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    sp.add_argument("--allow-create", action="store_true", help="allow action=create")
+    sp.add_argument("--allow-delete", action="store_true", help="allow action=delete")
+    sp.add_argument("--limit", type=int, help="apply only the first N changes (test on a small sample)")
+    sp.add_argument("--skip-errors", action="store_true", help="apply the valid rows even if some rows have errors")
+    sp.add_argument("--stop-on-error", action="store_true", help="stop after the first API error")
+    sp.add_argument("--delay", type=float, default=0.0, help="pause (seconds) between changes")
+    sp.add_argument("--out-dir", default="tcx-runs", help="where to save the backup and logs")
+    sp.add_argument("-v", "--verbose", action="store_true", help="also show rows with no changes")
     sp.set_defaults(fn=cmd_apply)
 
-    sp = sub.add_parser("rollback", parents=[common], help="cofnij zmiany z backup.json")
+    sp = sub.add_parser("rollback", parents=[common], help="undo changes using a backup.json")
     sp.add_argument("backup")
     sp.add_argument("--execute", action="store_true")
     sp.set_defaults(fn=cmd_rollback)
@@ -199,10 +199,10 @@ def main(argv=None) -> int:
     try:
         return args.fn(args)
     except ApiError as e:
-        print(f"BLAD: {e}", file=sys.stderr)
+        print(f"ERROR: {e}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        print("\nPrzerwano.", file=sys.stderr)
+        print("\nInterrupted.", file=sys.stderr)
         return 130
 
 
